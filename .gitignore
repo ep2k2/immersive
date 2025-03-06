@@ -1,0 +1,24 @@
+# Virtual environment
+venv/
+
+# Ignore environment variables
+.env
+
+# Compiled Python files
+*.pyc
+__pycache__/
+
+# Log files
+*.log
+
+# Temporary files
+*.tmp
+*.temp
+/writing-practice/app/temp
+
+# IDE/editor specific files
+.idea/
+.vscode/
+
+# models
+/writing-practice/app/models/
