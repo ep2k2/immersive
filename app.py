@@ -7,6 +7,8 @@ from io import BytesIO
 import base64
 import time  # Import time for sleep functionality
 import random  # Import random for generating random seeds
+import cv2
+import numpy as np
 
 def init_app():
     """Initialize the Streamlit app with basic configuration."""
@@ -74,27 +76,56 @@ def generate_image(prompt):
         print("Response content if available:", getattr(response, 'text', 'N/A'))
         return None
 
+def make_background_transparent_opencv(image):
+    """Convert white background to transparent using OpenCV's floodFill."""
+    # Convert the image to a NumPy array
+    image_np = np.array(image)
+
+    # Convert to RGB if the image has an alpha channel (RGBA)
+    if image_np.shape[2] == 4:  # Check if the image has 4 channels (RGBA)
+        image_np = cv2.cvtColor(image_np, cv2.COLOR_RGBA2RGB)  # Convert to RGB
+
+    # Create a mask for flood fill
+    h, w = image_np.shape[:2]
+    mask = np.zeros((h + 2, w + 2), np.uint8)
+
+    # Perform flood fill from the top-left corner (0, 0)
+    cv2.floodFill(image_np, mask, (0, 0), (0, 0, 0), loDiff=(10, 10, 10), upDiff=(10, 10, 10))
+
+    # Convert back to RGBA
+    image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2RGBA)  # Convert back to RGBA
+    image_np[mask[1:-1, 1:-1] > 0] = (0, 0, 0, 0)  # Set filled pixels to transparent
+
+    return Image.fromarray(image_np, 'RGBA')
+
 def overlay_images(background_image, character_image):
     """Overlay the character image on top of the background image."""
     # Ensure both images are in RGBA mode
     background_image = background_image.convert("RGBA")
-    character_image = character_image.convert("RGBA")
+    character_image = make_background_transparent_opencv(character_image)  # Make white background transparent
 
     # Get dimensions
     bg_width, bg_height = background_image.size
     char_width, char_height = character_image.size
 
-    # Resize character image if needed (optional)
-    character_image = character_image.resize((char_width // 1, char_height // 1
-                                              ))
+    # Define a scaling factor (e.g., 0.8 for 80% of the original size)
+    scaling_factor = 0.8  # Adjust this value as needed
+
+    # Calculate new dimensions
+    new_char_width = int(char_width * scaling_factor)
+    new_char_height = int(char_height * scaling_factor)
+
+    # Resize character image
+    character_image = character_image.resize((new_char_width, new_char_height))
 
     # Calculate position to align the bottom of the character image with the bottom of the background
-    position = ((bg_width - character_image.width) // 2, bg_height - character_image.height)
+    position_x = int(bg_width * (2/3)) - (character_image.width // 2)
+    position_y = bg_height - character_image.height  # Align bottom
 
     # Create a new image for the overlay
     combined_image = Image.new("RGBA", background_image.size)
     combined_image.paste(background_image, (0, 0))  # Paste background
-    combined_image.paste(character_image, position, character_image)  # Paste character with transparency
+    combined_image.paste(character_image, (position_x, position_y), character_image)  # Paste character with transparency
 
     return combined_image
 
