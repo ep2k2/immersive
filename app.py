@@ -2,13 +2,14 @@ import streamlit as st
 import os
 import requests  # Import the requests library
 from dotenv import load_dotenv
-from PIL import Image
+from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
 import base64
 import time  # Import time for sleep functionality
 import random  # Import random for generating random seeds
 import cv2
 import numpy as np
+import textwrap
 
 def init_app():
     """Initialize the Streamlit app with basic configuration."""
@@ -19,7 +20,7 @@ def init_app():
     st.title("LLM Image Generator")
     return True
 
-def generate_image(prompt, steps=4):
+def generate_image(prompt, steps=4, seed=None):
     """Call the FLUX API to generate an image based on the prompt."""
     load_dotenv()
     api_key = os.getenv('FLUX_SCHNELL_FREE_API_KEY')
@@ -28,8 +29,9 @@ def generate_image(prompt, steps=4):
 
     url = "https://api.together.xyz/v1/images/generations"
     
-    # Generate a random seed between 0 and 10000
-    seed = random.randint(0, 10000)
+    # Use provided seed or generate random one if None
+    if seed is None:
+        seed = random.randint(0, 10000)
 
     payload = {
         "prompt": prompt,
@@ -40,7 +42,7 @@ def generate_image(prompt, steps=4):
         "width": 800,
         "guidance": 3.5,
         "output_format": "png",
-        "seed": seed  # Include the random seed in the payload
+        "seed": seed
     }
     headers = {
         "accept": "application/json",
@@ -215,67 +217,434 @@ def fade_transition(placeholder, old_image, new_image, steps=5):
         # Shorter delay for faster animation (0.5 seconds total for 5 steps = 0.1 seconds per step)
         time.sleep(0.1)  # Updated delay for faster transition
 
+def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_y=0, weight='regular'):
+    """Create a speech bubble with text on the image."""
+    # Create a copy of the image to draw on
+    img_with_bubble = image.copy()
+    draw = ImageDraw.Draw(img_with_bubble)
+    
+    # Load the appropriate font based on weight
+    font_path = "fonts/NotoSansJP-Regular.ttf"
+    if weight == 'bold':
+        font_path = "fonts/NotoSansJP-Bold.ttf"
+    
+    try:
+        font = ImageFont.truetype(font_path, 15)
+    except (IOError, OSError) as e:
+        # Print detailed error for debugging
+        print(f"Font error: {e}")
+        print(f"Font not found or cannot be used at {font_path}, falling back to default")
+        # Try to find any available font that can handle Japanese
+        try:
+            # Try to use a system font that might support Japanese
+            system_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 15)
+            font = system_font
+        except:
+            font = ImageFont.load_default()  # Last resort fallback
+    
+    # Make bubbles much wider - increase max_width significantly
+    max_width_adjusted = 60  # Much wider to avoid unnecessary wrapping
+    wrapped_text = textwrap.fill(text, width=max_width_adjusted)
+    lines = wrapped_text.split('\n')
+    
+    # Calculate text size
+    line_heights = [draw.textbbox((0, 0), line, font=font)[3] for line in lines]
+    text_width = max([draw.textbbox((0, 0), line, font=font)[2] for line in lines])
+    text_height = sum(line_heights)
+    
+    # Calculate bubble size with padding
+    padding = 20  # Slightly increased padding for larger font
+    bubble_width = text_width + padding * 2
+    bubble_height = text_height + padding * 2
+    
+    # Calculate image dimensions
+    img_width, img_height = img_with_bubble.size
+    
+    # Start position closer to top, with offset based on dialogue index
+    # Position centered at 1/3 of the way across the panel
+    base_x = img_width // 3
+    base_y = 40  # Start closer to the top (was 80)
+    
+    # Apply only a small horizontal variation to keep bubbles more aligned
+    # Use a smaller fraction of the width for horizontal shift
+    horizontal_shift = ((offset_y // 60) % 3 - 1) * (img_width // 10)  # Reduced from 1/5 to 1/10
+    
+    # Adjust position based on offset with smaller vertical increments
+    position = (base_x + horizontal_shift, base_y + offset_y)
+    
+    # Calculate bubble coordinates
+    x, y = position
+    x = min(max(x, bubble_width // 2 + 20), img_with_bubble.width - bubble_width // 2 - 20)
+    y = min(max(y, bubble_height // 2 + 20), img_with_bubble.height - bubble_height - 20)
+    
+    left = x - bubble_width // 2
+    top = y - bubble_height // 2
+    right = x + bubble_width // 2
+    bottom = y + bubble_height // 2
+    
+    # Draw bubble with rounded corners
+    corner_radius = 20
+    draw.rounded_rectangle([left, top, right, bottom], 
+                          fill=(255, 255, 255, 230), 
+                          outline=(0, 0, 0), 
+                          width=2, 
+                          radius=corner_radius)
+    
+    # Draw text in bubble
+    y_text = top + padding
+    for line in lines:
+        line_width = draw.textbbox((0, 0), line, font=font)[2]
+        x_text = left + (bubble_width - line_width) // 2
+        draw.text((x_text, y_text), line, font=font, fill=(0, 0, 0))
+        y_text += line_heights[0]  # Assuming all lines have same height
+    
+    return img_with_bubble
+
+def init_scene_state():
+    """Initialize or reset the scene state in session."""
+    default_state = {
+        'panels': {
+            'top_right': None,
+            'bottom_right': None,
+            'top_left': None,
+            'bottom_left': None
+        },
+        'panel_count': 0,                 # Track how many panels we've filled
+        'current_position': 'top_right',  # Start with top right panel
+        'current_stage': 'background',    # Start with background generation
+        'scene_background': None,         # Store the scene background for reuse
+        'background_image': None,
+        'character_image': None,
+        'combined_image': None,
+        'processing': False,              # Flag to track if we're in the middle of processing
+        'dialogue_lines': [],             # Store dialogue lines
+        'current_dialogue_index': 0,      # Track which dialogue line we're on
+        'dialogue_offsets': {}            # Track vertical offsets for dialogue in each panel
+    }
+    
+    if 'scene_state' not in st.session_state:
+        st.session_state.scene_state = default_state
+    else:
+        # Ensure all required keys exist (for backward compatibility)
+        for key, value in default_state.items():
+            if key not in st.session_state.scene_state:
+                st.session_state.scene_state[key] = value
+
+def get_next_panel_position(current_position=None):
+    """Get the next panel position in manga reading order."""
+    # Japanese manga reading order: top-right → bottom-right → top-left → bottom-left
+    order = ['top_right', 'bottom_right', 'top_left', 'bottom_left']
+    
+    if current_position is None:
+        current_position = st.session_state.scene_state['current_position']
+    
+    current_index = order.index(current_position)
+    next_index = (current_index + 1) % len(order)
+    return order[next_index]
+
+def process_dialogue(dialogue_line, current_image, current_offset):
+    """Process a dialogue line and add it to the current image."""
+    # Create a speech bubble with the dialogue
+    new_image = create_speech_bubble(current_image, dialogue_line, offset_y=current_offset)
+    return new_image
+
 def main():
     """Main function to run the Streamlit app."""
     init_app()
+    init_scene_state()
     
-    # User input for character description
-    character_description = st.text_area(
-        "Enter character description:",
-        height=100,
-        placeholder="Describe the character you want to generate..."
-    )
+    # Create two columns - left for inputs, right for image
+    left_col, right_col = st.columns([1, 2])  # 1:2 ratio for column widths
     
-    # User input for background description
-    background_description = st.text_area(
-        "Enter background description:",
-        height=100,
-        placeholder="Describe the background you want to generate..."
-    )
+    # Check if we need to process dialogue (this happens before UI rendering)
+    if 'process_dialogue' in st.session_state and st.session_state.process_dialogue:
+        # Get the current dialogue line
+        dialogue_index = st.session_state.scene_state['current_dialogue_index']
+        if dialogue_index < len(st.session_state.scene_state['dialogue_lines']):
+            dialogue_line = st.session_state.scene_state['dialogue_lines'][dialogue_index]
+            
+            # Get the current panel position
+            current_pos = st.session_state.scene_state['current_position']
+            
+            # Initialize offset tracking for this panel if needed
+            if current_pos not in st.session_state.scene_state['dialogue_offsets']:
+                st.session_state.scene_state['dialogue_offsets'][current_pos] = 0
+            
+            # Get current offset for this panel
+            current_offset = st.session_state.scene_state['dialogue_offsets'][current_pos]
+            
+            # Process the dialogue
+            current_image = st.session_state.scene_state['combined_image']
+            new_image = process_dialogue(dialogue_line, current_image, current_offset)
+            
+            # Update the combined image with the speech bubble
+            st.session_state.scene_state['combined_image'] = new_image
+            
+            # Update the dialogue index and offset
+            st.session_state.scene_state['current_dialogue_index'] += 1
+            st.session_state.scene_state['dialogue_offsets'][current_pos] += 60
+        
+        # Reset the processing flags
+        st.session_state.process_dialogue = False
+        st.session_state.scene_state['processing'] = False
     
-    # Create a placeholder for the image display
-    image_placeholder = st.empty()
+    # Continue with the rest of the UI rendering
+    with left_col:
+        # Move the seed input section to the top - use columns to place label and input side by side
+        seed_label_col, seed_input_col = st.columns([1, 3])
+        with seed_label_col:
+            st.write("Seed:", unsafe_allow_html=True)
+        
+        with seed_input_col:
+            # Check if we need to randomize the seed
+            if 'randomize_seed' in st.session_state and st.session_state.randomize_seed:
+                # Generate a new random seed
+                seed_value = random.randint(0, 10000)
+                # Reset the flag
+                st.session_state.randomize_seed = False
+            else:
+                # Use existing seed value
+                seed_value = st.session_state.get('seed', 0)
+            
+            # Use a number input with the seed value (no label)
+            st.session_state.seed = st.number_input("Seed", min_value=0, max_value=10000, value=seed_value, format="%d", key="seed_input", label_visibility="collapsed")
+        
+        # Randomize button directly underneath the seed input
+        if st.button("🎲 Randomize"):
+            # Set a flag to randomize on next rerun
+            st.session_state.randomize_seed = True
+            # Force a rerun to update the UI immediately
+            st.rerun()
+
+        # Character and background descriptions
+        character_description = st.text_area(
+            "Enter character description:",
+            height=150,
+            placeholder="Describe the character you want to generate..."
+        )
+        
+        background_description = st.text_area(
+            "Enter background description:",
+            height=150,
+            placeholder="Describe the background you want to generate..."
+        )
+        
+        # Dialogue input
+        dialogue = st.text_area(
+            "Enter dialogue:",
+            height=100,
+            placeholder="Enter character dialogue (one line per bubble)..."
+        )
+
+        # Study word focus
+        study_word_focus = st.text_area(
+            "Study word focus:",
+            height=100,
+            placeholder="Enter words or phrases to focus on..."
+        )
+        
+        # Generate buttons
+        col3, col4, col5 = st.columns(3)
+        with col3:
+            new_scene_button = st.button("New Scene")
+        with col4:
+            # Enable next panel button only if we have a completed panel and fewer than 4 panels
+            next_panel_button = st.button("Next panel", 
+                                         disabled=st.session_state.scene_state['processing'] or 
+                                                 st.session_state.scene_state['current_stage'] != 'complete' or
+                                                 st.session_state.scene_state['panel_count'] >= 3)
+        with col5:
+            # Process dialogue input and store in session state
+            if dialogue:
+                # Split dialogue by newlines and filter out empty lines
+                dialogue_lines = [line.strip() for line in dialogue.split('\n') if line.strip()]
+                
+                # Only reset dialogue index if the dialogue content has changed
+                current_dialogue = st.session_state.scene_state.get('dialogue_lines', [])
+                if dialogue_lines != current_dialogue:
+                    st.session_state.scene_state['dialogue_lines'] = dialogue_lines
+                    st.session_state.scene_state['current_dialogue_index'] = 0
+                    # Also reset dialogue offsets when dialogue changes
+                    st.session_state.scene_state['dialogue_offsets'] = {}
+            
+            # Enable next dialogue button only if we have dialogue lines and a completed panel
+            has_unused_dialogue = (st.session_state.scene_state['current_dialogue_index'] < 
+                                  len(st.session_state.scene_state['dialogue_lines']))
+            
+            next_dialogue_button = st.button("Next dialogue", 
+                                           disabled=st.session_state.scene_state['processing'] or 
+                                                   st.session_state.scene_state['current_stage'] != 'complete' or
+                                                   not has_unused_dialogue)
+
+    # Show processing message in left column when generating
+    if st.session_state.scene_state['processing']:
+        st.info("Processing your prompts...")
     
-    # Submit button
-    if st.button("Generate Images"):
+    with right_col:
+        # Create layout for manga panels
+        scene_container = st.container()
+        with scene_container:
+            # Create a 2x2 grid for panels in the correct order
+            row1 = st.columns(2)
+            row2 = st.columns(2)
+            
+            # Get columns in the right order for manga reading
+            tr_col = row1[0]  # Top-right (first position)
+            br_col = row2[0]  # Bottom-right (second position)
+            tl_col = row1[1]  # Top-left (third position)
+            bl_col = row2[1]  # Bottom-left (fourth position)
+            
+            # Display panels in manga order
+            with tr_col:
+                if st.session_state.scene_state['panels']['top_right'] is not None:
+                    st.image(st.session_state.scene_state['panels']['top_right'], use_container_width=True)
+            with br_col:
+                if st.session_state.scene_state['panels']['bottom_right'] is not None:
+                    st.image(st.session_state.scene_state['panels']['bottom_right'], use_container_width=True)
+            with tl_col:
+                if st.session_state.scene_state['panels']['top_left'] is not None:
+                    st.image(st.session_state.scene_state['panels']['top_left'], use_container_width=True)
+            with bl_col:
+                if st.session_state.scene_state['panels']['bottom_left'] is not None:
+                    st.image(st.session_state.scene_state['panels']['bottom_left'], use_container_width=True)
+            
+            # Display current working image in the appropriate panel
+            current_position = st.session_state.scene_state['current_position']
+            current_image = None
+            
+            if st.session_state.scene_state['current_stage'] == 'background':
+                current_image = st.session_state.scene_state['background_image']
+            elif st.session_state.scene_state['current_stage'] in ['character', 'complete']:
+                current_image = st.session_state.scene_state['combined_image']
+            
+            if current_image is not None:
+                # Display in the current panel position
+                if current_position == 'top_right':
+                    with tr_col:
+                        st.image(current_image, use_container_width=True)
+                elif current_position == 'bottom_right':
+                    with br_col:
+                        st.image(current_image, use_container_width=True)
+                elif current_position == 'top_left':
+                    with tl_col:
+                        st.image(current_image, use_container_width=True)
+                elif current_position == 'bottom_left':
+                    with bl_col:
+                        st.image(current_image, use_container_width=True)
+
+    # Handle generation
+    if new_scene_button:
         if character_description and background_description:
-            st.info("Processing your prompts...")
-            
-            # Generate background image
-            background_image = generate_image(background_description, steps=4)  # Call with steps=4 for background
-            if background_image:
-                # Apply Gaussian blur to the background image
-                blurred_background = apply_gaussian_blur(background_image)
-                
-                # Display the blurred background image in the placeholder
-                image_placeholder.image(blurred_background, caption="Background Image", use_container_width=True)
-                
-                # Store the blurred background for fade transition
-                current_image = blurred_background
+            # Process dialogue input for the new scene
+            if dialogue:
+                # Split dialogue by newlines and filter out empty lines
+                dialogue_lines = [line.strip() for line in dialogue.split('\n') if line.strip()]
             else:
-                st.error("Failed to generate background image.")
-                return
-            
-            # Wait for 10 seconds before generating the character image
-            time.sleep(10)  # Simple wait loop
-            
-            # Generate character image
-            character_image = generate_image(character_description, steps=4)  # Call with steps=4 for character
-            if character_image:
-                # Overlay the character on the background
-                combined_image = overlay_images(blurred_background, character_image)
+                dialogue_lines = []
                 
-                # Apply fade transition from background to combined image
-                try:
-                    fade_transition(image_placeholder, current_image, combined_image)
-                except Exception as e:
-                    # Fallback if fade transition fails
-                    st.warning(f"Fade transition failed: {str(e)}")
-                    image_placeholder.image(combined_image, caption="Combined Image", use_container_width=True)
-            else:
-                st.error("Failed to generate character image.")
+            # Reset scene state for new scene
+            st.session_state.scene_state = {
+                'panels': {
+                    'top_right': None,
+                    'bottom_right': None,
+                    'top_left': None,
+                    'bottom_left': None
+                },
+                'panel_count': 0,
+                'current_position': 'top_right',
+                'current_stage': 'background',
+                'scene_background': None,
+                'background_image': None,
+                'character_image': None,
+                'combined_image': None,
+                'processing': True,
+                'dialogue_lines': dialogue_lines,
+                'current_dialogue_index': 0,
+                'dialogue_offsets': {}
+            }
+            
+            # Start generating the first panel
+            st.rerun()
+            
+    elif next_panel_button:
+        if character_description and background_description:
+            # Save the current completed panel
+            current_pos = st.session_state.scene_state['current_position']
+            st.session_state.scene_state['panels'][current_pos] = st.session_state.scene_state['combined_image']
+            st.session_state.scene_state['panel_count'] += 1
+            
+            # Move to the next panel position
+            next_pos = get_next_panel_position()
+            st.session_state.scene_state['current_position'] = next_pos
+            st.session_state.scene_state['current_stage'] = 'character'  # Skip background generation
+            st.session_state.scene_state['background_image'] = st.session_state.scene_state['scene_background']  # Reuse background
+            st.session_state.scene_state['character_image'] = None
+            st.session_state.scene_state['combined_image'] = None
+            st.session_state.scene_state['processing'] = True
+            
+            st.rerun()
         else:
             st.warning("Please enter both character and background descriptions.")
+    
+    elif next_dialogue_button:
+        if st.session_state.scene_state['combined_image'] is not None:
+            # Set flags to process dialogue on next rerun
+            st.session_state.process_dialogue = True
+            st.session_state.scene_state['processing'] = True
+            
+            # Force a rerun to process the dialogue
+            st.rerun()
+    
+    # Process the current stage if we're in processing mode
+    if st.session_state.scene_state['processing']:
+        process_current_stage(character_description, background_description, st.session_state.seed)
+
+def process_current_stage(character_description, background_description, seed):
+    """Process the current stage of scene generation."""
+    current_stage = st.session_state.scene_state['current_stage']
+    
+    if current_stage == 'background':
+        # Generate background image only for the first panel in a scene
+        background_image = generate_image(background_description, steps=4, seed=seed)
+        if background_image:
+            # Apply Gaussian blur for combined view
+            blurred_background = apply_gaussian_blur(background_image)
+            
+            # Store the background image for this scene
+            st.session_state.scene_state['scene_background'] = blurred_background
+            st.session_state.scene_state['background_image'] = blurred_background
+            
+            # Move directly to character stage
+            st.session_state.scene_state['current_stage'] = 'character'
+            
+            # Wait for 10 seconds before generating character
+            time.sleep(10)
+            
+            st.rerun()
+        else:
+            st.error("Failed to generate background image.")
+            st.session_state.scene_state['processing'] = False
+    
+    elif current_stage == 'character':
+        # Generate character image
+        character_image = generate_image(character_description, steps=4, seed=seed)
+        if character_image:
+            # Get the background image
+            background_image = st.session_state.scene_state['background_image']
+            
+            # Create combined image
+            combined_image = overlay_images(background_image, character_image)
+            st.session_state.scene_state['combined_image'] = combined_image
+            st.session_state.scene_state['character_image'] = character_image
+            
+            # Mark as complete
+            st.session_state.scene_state['current_stage'] = 'complete'
+            st.session_state.scene_state['processing'] = False
+            
+            st.rerun()
+        else:
+            st.error("Failed to generate character image.")
+            st.session_state.scene_state['processing'] = False
 
 if __name__ == "__main__":
     main() 
