@@ -19,7 +19,7 @@ def init_app():
     st.title("LLM Image Generator")
     return True
 
-def generate_image(prompt):
+def generate_image(prompt, steps=4):
     """Call the FLUX API to generate an image based on the prompt."""
     load_dotenv()
     api_key = os.getenv('FLUX_SCHNELL_FREE_API_KEY')
@@ -34,7 +34,7 @@ def generate_image(prompt):
     payload = {
         "prompt": prompt,
         "model": "black-forest-labs/FLUX.1-schnell-Free",
-        "steps": 4,
+        "steps": steps,
         "n": 1,
         "height": 400,
         "width": 800,
@@ -166,26 +166,54 @@ def overlay_images(background_image, character_image):
     # Resize background image to fit canvas
     background_image_resized = background_image.resize((canvas_width, canvas_height))  # Resize background to fit canvas
 
-    # Convert background image to NumPy array for Gaussian blur
-    bg_np = np.array(background_image_resized)
-
-    # Apply Gaussian blur to the background
-    blurred_bg_np = cv2.GaussianBlur(bg_np, (5, 5), 0)  # Adjust kernel size as needed
-
-    # Convert back to PIL Image
-    blurred_background_image = Image.fromarray(blurred_bg_np, 'RGBA')
-
-    # Paste the blurred background image onto the canvas
-    canvas.paste(blurred_background_image, (0, 0))  # Paste background at the top-left corner
+    # Paste the background image onto the canvas
+    canvas.paste(background_image_resized, (0, 0))  # Paste background at the top-left corner
 
     # Calculate position to align the bottom of the character image with the bottom of the canvas
-    position_x = int(canvas_width * (2/3)) - (character_image.width // 2)
+    # Position character closer to the right edge (4/5 of the way across)
+    position_x = int(canvas_width * (2/3)) - (character_image.width // 2)  # Position two-thirds of the way to the right
     position_y = canvas_height - character_image.height  # Align bottom
 
-    # Overlay the character image on the canvas using alpha blending
-    combined_image = alpha_blend(character_image, canvas)  # Use alpha blending
+    # Create a new canvas for the character at the correct position
+    character_canvas = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 0))
+    character_canvas.paste(character_image, (position_x, position_y))
+
+    # Overlay the positioned character on the canvas using alpha blending
+    combined_image = alpha_blend(character_canvas, canvas)
 
     return combined_image
+
+def apply_gaussian_blur(image):
+    """Apply Gaussian blur to an image."""
+    # Ensure image is in RGBA mode
+    image = image.convert("RGBA")
+    
+    # Convert image to NumPy array for Gaussian blur
+    img_np = np.array(image)
+    
+    # Apply Gaussian blur
+    blurred_np = cv2.GaussianBlur(img_np, (5, 5), 0)  # Adjust kernel size as needed
+    
+    # Convert back to PIL Image
+    blurred_image = Image.fromarray(blurred_np, 'RGBA')
+    
+    return blurred_image
+
+def fade_transition(placeholder, old_image, new_image, steps=5):
+    """Create a fade transition between two images."""
+    for alpha in range(0, steps + 1):
+        # Calculate the alpha value for blending
+        alpha_value = alpha / steps
+        
+        # Create a blended image
+        blended_np = np.array(old_image) * (1 - alpha_value) + np.array(new_image) * alpha_value
+        blended_image = Image.fromarray(blended_np.astype(np.uint8), 'RGBA')
+        
+        # Update the placeholder with the blended image
+        placeholder.image(blended_image, use_container_width=True)
+        
+        # Shorter delay for faster animation (0.5 seconds total for 5 steps = 0.1 seconds per step)
+        time.sleep(0.1)  # Updated delay for faster transition
 
 def main():
     """Main function to run the Streamlit app."""
@@ -205,32 +233,47 @@ def main():
         placeholder="Describe the background you want to generate..."
     )
     
+    # Create a placeholder for the image display
+    image_placeholder = st.empty()
+    
     # Submit button
     if st.button("Generate Images"):
         if character_description and background_description:
             st.info("Processing your prompts...")
             
-            # Generate character image
-            character_image = generate_image(character_description)  # Call the LLM function for character
-            if character_image:
-                st.image(character_image, caption="Character Image", use_container_width=True)
-            else:
-                st.error("Failed to generate character image.")
-            
-            # Wait for 10 seconds before generating the background image
-            time.sleep(10)  # Simple wait loop
-            
             # Generate background image
-            background_image = generate_image(background_description)  # Call the LLM function for background
+            background_image = generate_image(background_description, steps=4)  # Call with steps=4 for background
             if background_image:
-                st.image(background_image, caption="Background Image", use_container_width=True)
+                # Apply Gaussian blur to the background image
+                blurred_background = apply_gaussian_blur(background_image)
+                
+                # Display the blurred background image in the placeholder
+                image_placeholder.image(blurred_background, caption="Background Image", use_container_width=True)
+                
+                # Store the blurred background for fade transition
+                current_image = blurred_background
             else:
                 st.error("Failed to generate background image.")
-
-            # Overlay the character on the background
-            if character_image and background_image:
-                combined_image = overlay_images(background_image, character_image)
-                st.image(combined_image, caption="Combined Image", use_container_width=True)
+                return
+            
+            # Wait for 10 seconds before generating the character image
+            time.sleep(10)  # Simple wait loop
+            
+            # Generate character image
+            character_image = generate_image(character_description, steps=4)  # Call with steps=4 for character
+            if character_image:
+                # Overlay the character on the background
+                combined_image = overlay_images(blurred_background, character_image)
+                
+                # Apply fade transition from background to combined image
+                try:
+                    fade_transition(image_placeholder, current_image, combined_image)
+                except Exception as e:
+                    # Fallback if fade transition fails
+                    st.warning(f"Fade transition failed: {str(e)}")
+                    image_placeholder.image(combined_image, caption="Combined Image", use_container_width=True)
+            else:
+                st.error("Failed to generate character image.")
         else:
             st.warning("Please enter both character and background descriptions.")
 
