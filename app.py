@@ -12,16 +12,16 @@ import numpy as np
 import textwrap
 
 # Feature flags for development
-ENABLE_IMAGE_GENERATION = True  # Set to False to skip image generation (background and character)
+ENABLE_IMAGE_GENERATION = False  # Set to False to skip image generation (background and character)
 ENABLE_AUDIO_GENERATION = True  # Set to False to skip audio generation for dialogue
 
 def init_app():
     """Initialize the Streamlit app with basic configuration."""
     st.set_page_config(
-        page_title="LLM Image Generator",
+        page_title="日常のスケッチ-EXP",
         layout="wide"
     )
-    st.title("LLM Image Generator")
+    st.title("日常のスケッチ-EXP 📅🖼️")
     return True
 
 def generate_image(prompt, steps=4, seed=None):
@@ -425,7 +425,7 @@ def play_audio(audio_content):
     if audio_content:
         # Create a temporary file to store the audio
         audio_file = BytesIO(audio_content)
-        st.audio(audio_file, format='audio/wav')
+        st.audio(audio_file, format='audio/wav', autoplay=True)  # Set autoplay to True
 
 def main():
     """Main function to run the Streamlit app."""
@@ -614,7 +614,7 @@ def main():
                 elif current_position == 'bottom_left':
                     with bl_col:
                         st.image(current_image, use_container_width=True)
-            
+
             # Play the most recent audio if available
             if st.session_state.scene_state['current_dialogue_index'] > 0:
                 dialogue_index = st.session_state.scene_state['current_dialogue_index'] - 1
@@ -627,7 +627,7 @@ def main():
                         audio_container = st.container()
                         with audio_container:
                             st.write("Audio for current dialogue:")
-                            play_audio(audio_content)
+                            play_audio(audio_content)  # Ensure this is called in the right context
 
     # Handle generation
     if new_scene_button:
