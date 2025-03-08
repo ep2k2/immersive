@@ -11,6 +11,13 @@ import cv2
 import numpy as np
 import textwrap
 
+# Predefined prompt variables
+LLM_PROMPT_TEMPLATE = "Generate a manga panel with a character and a background. The character should be described as follows: {character_description}. The background should be described as follows: {background_description}. The background style should be described as follows: {background_style_suffix}."
+LLM_PROMPT_CHARACTER_EXAMPLE = "a Japanese woman smiling widely, short hair, square glasses, wearing dungarees"
+LLM_PROMPT_CHARACTER_STYLE = ", isolated, pure white canvas, no environment, thick outline, pointilism pencil sketch with cross-hatch shading in blue tones, frame from waist and include all of the head"
+LLM_PROMPT_BACKGROUND_EXAMPLE = "outside a theatre in a Japanese city"
+LLM_PROMPT_SUFFIX_BACKGROUND_STYLE = ",detailed blue pencil sketch with bold dark block shading"
+
 # Feature flags for development
 ENABLE_IMAGE_GENERATION = False  # Set to False to skip image generation (background and character)
 ENABLE_AUDIO_GENERATION = True  # Set to False to skip audio generation for dialogue
@@ -466,12 +473,35 @@ def main():
         st.session_state.process_dialogue = False
         st.session_state.scene_state['processing'] = False
     
-    # Continue with the rest of the UI rendering
     with left_col:
-        # Move the seed input section to the top - use columns to place label and input side by side
+        # Button to load sample JLPT5 word list
+        if st.button("Load Sample JLPT5 Word List"):
+            try:
+                with open('seed_data/JLPT5_words.txt', 'r', encoding='utf-8') as file:
+                    words = file.read().strip()
+                    st.session_state.study_word_focus = words  # Store in session state
+                    st.success("JLPT5 word list loaded successfully!")
+            except Exception as e:
+                st.error(f"Error loading word list: {str(e)}")
+
+        # Study word focus
+        study_word_focus = st.text_area(
+            "Study word focus:",
+            height=100,
+            value=st.session_state.get('study_word_focus', ""),  # Set the value from session state
+            placeholder="Enter words or phrases to focus on..."
+        )
+        
+        # Button to call Gemini for a scenario
+        if st.button("Call Gemini for a Scenario"):
+            # Implement the logic to call Gemini API or function here
+            scenario = call_gemini_api()  # Replace with your actual function
+            st.session_state.study_word_focus = scenario  # Store the scenario in the text area
+            st.success("Scenario generated successfully!")
+
         seed_label_col, seed_input_col = st.columns([1, 3])
         with seed_label_col:
-            st.write("Seed:", unsafe_allow_html=True)
+            st.write("Image seed:", unsafe_allow_html=True)
         
         with seed_input_col:
             # Check if we need to randomize the seed
@@ -494,31 +524,32 @@ def main():
             # Force a rerun to update the UI immediately
             st.rerun()
 
-        # Character and background descriptions
+        # Character description with predefined prompt
         character_description = st.text_area(
             "Enter character description:",
             height=150,
-            placeholder="Describe the character you want to generate..."
+            placeholder='e.g., "a Japanese woman smiling widely, short hair, square glasses, wearing dungarees"'
         )
         
+        # Background description with predefined prompt
         background_description = st.text_area(
             "Enter background description:",
             height=150,
-            placeholder="Describe the background you want to generate..."
+            placeholder='e.g., "outside a theatre in a Japanese city"'
         )
         
-        # Dialogue input
+        # Background style suffix with predefined prompt
+        background_style_suffix = st.text_area(
+            "Enter background style suffix:",
+            height=100,
+            placeholder='e.g., "detailed blue pencil sketch with bold dark block shading"'
+        )
+
+        # Dialogue input with predefined prompt
         dialogue = st.text_area(
             "Enter dialogue:",
             height=100,
-            placeholder="Enter character dialogue (one line per bubble)..."
-        )
-
-        # Study word focus
-        study_word_focus = st.text_area(
-            "Study word focus:",
-            height=100,
-            placeholder="Enter words or phrases to focus on..."
+            placeholder='e.g., "What a beautiful day!"'
         )
         
         # Generate buttons
@@ -722,6 +753,12 @@ def process_current_stage(character_description, background_description, seed):
         else:
             st.error("Failed to generate character image.")
             st.session_state.scene_state['processing'] = False
+
+# Function to call Gemini API (placeholder)
+def call_gemini_api():
+    # Implement the actual API call logic here
+    # For example, return a generated scenario
+    return "Generated scenario from Gemini API."
 
 if __name__ == "__main__":
     main() 
