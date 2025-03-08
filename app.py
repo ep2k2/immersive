@@ -11,6 +11,10 @@ import cv2
 import numpy as np
 import textwrap
 
+# Feature flags for development
+ENABLE_IMAGE_GENERATION = True  # Set to False to skip image generation (background and character)
+ENABLE_AUDIO_GENERATION = True  # Set to False to skip audio generation for dialogue
+
 def init_app():
     """Initialize the Streamlit app with basic configuration."""
     st.set_page_config(
@@ -22,6 +26,14 @@ def init_app():
 
 def generate_image(prompt, steps=4, seed=None):
     """Call the FLUX API to generate an image based on the prompt."""
+    if not ENABLE_IMAGE_GENERATION:
+        print("Image generation is disabled")
+        # Return a placeholder image instead
+        placeholder = Image.new('RGB', (800, 400), color=(200, 200, 200))
+        draw = ImageDraw.Draw(placeholder)
+        draw.text((400, 200), "Image Generation Disabled", fill=(0, 0, 0))
+        return placeholder
+    
     load_dotenv()
     api_key = os.getenv('FLUX_SCHNELL_FREE_API_KEY')
     if not api_key:
@@ -319,7 +331,8 @@ def init_scene_state():
         'processing': False,              # Flag to track if we're in the middle of processing
         'dialogue_lines': [],             # Store dialogue lines
         'current_dialogue_index': 0,      # Track which dialogue line we're on
-        'dialogue_offsets': {}            # Track vertical offsets for dialogue in each panel
+        'dialogue_offsets': {},           # Track vertical offsets for dialogue in each panel
+        'dialogue_audio': {}              # Store audio for each dialogue line
     }
     
     if 'scene_state' not in st.session_state:
@@ -346,7 +359,73 @@ def process_dialogue(dialogue_line, current_image, current_offset):
     """Process a dialogue line and add it to the current image."""
     # Create a speech bubble with the dialogue
     new_image = create_speech_bubble(current_image, dialogue_line, offset_y=current_offset)
-    return new_image
+    
+    # Generate audio for the dialogue line
+    audio_content = generate_speech(dialogue_line)
+    
+    return new_image, audio_content
+
+def generate_speech(text):
+    """Generate speech audio from text using Google's Text-to-Speech API."""
+    if not ENABLE_AUDIO_GENERATION:
+        print("Audio generation is disabled")
+        return None
+    
+    load_dotenv()
+    api_key = os.getenv('GOOGLE_TTS_API_KEY')
+    if not api_key:
+        print("GOOGLE_TTS_API_KEY not found in .env file")
+        return None
+    
+    url = "https://texttospeech.googleapis.com/v1beta1/text:synthesize"
+    
+    payload = {
+        "audioConfig": {
+            "audioEncoding": "LINEAR16",
+            "pitch": 1,
+            "speakingRate": 1.00
+        },
+        "input": {
+            "text": text
+        },
+        "voice": {
+            "languageCode": "ja-JP",
+            "name": "ja-JP-Standard-D"
+        }
+    }
+    
+    headers = {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": api_key
+    }
+    
+    try:
+        response = requests.post(url, json=payload, headers=headers)
+        response.raise_for_status()
+        
+        print("TTS Response status:", response.status_code)
+        
+        response_data = response.json()
+        
+        if 'audioContent' in response_data:
+            # Decode the base64 audio content
+            audio_content = base64.b64decode(response_data['audioContent'])
+            return audio_content
+        
+        print("Unexpected TTS response structure:", response_data)
+        return None
+        
+    except Exception as e:
+        print(f"Error during speech generation: {str(e)}")
+        print("Response content if available:", getattr(response, 'text', 'N/A'))
+        return None
+
+def play_audio(audio_content):
+    """Play audio content in Streamlit."""
+    if audio_content:
+        # Create a temporary file to store the audio
+        audio_file = BytesIO(audio_content)
+        st.audio(audio_file, format='audio/wav')
 
 def main():
     """Main function to run the Streamlit app."""
@@ -373,12 +452,16 @@ def main():
             # Get current offset for this panel
             current_offset = st.session_state.scene_state['dialogue_offsets'][current_pos]
             
-            # Process the dialogue
+            # Process the dialogue and get audio
             current_image = st.session_state.scene_state['combined_image']
-            new_image = process_dialogue(dialogue_line, current_image, current_offset)
+            new_image, audio_content = process_dialogue(dialogue_line, current_image, current_offset)
             
             # Update the combined image with the speech bubble
             st.session_state.scene_state['combined_image'] = new_image
+            
+            # Store the audio content
+            audio_key = f"{current_pos}_{dialogue_index}"
+            st.session_state.scene_state['dialogue_audio'][audio_key] = audio_content
             
             # Update the dialogue index and offset
             st.session_state.scene_state['current_dialogue_index'] += 1
@@ -531,6 +614,20 @@ def main():
                 elif current_position == 'bottom_left':
                     with bl_col:
                         st.image(current_image, use_container_width=True)
+            
+            # Play the most recent audio if available
+            if st.session_state.scene_state['current_dialogue_index'] > 0:
+                dialogue_index = st.session_state.scene_state['current_dialogue_index'] - 1
+                audio_key = f"{current_position}_{dialogue_index}"
+                
+                if audio_key in st.session_state.scene_state['dialogue_audio']:
+                    audio_content = st.session_state.scene_state['dialogue_audio'][audio_key]
+                    if audio_content:
+                        # Create a container for the audio player
+                        audio_container = st.container()
+                        with audio_container:
+                            st.write("Audio for current dialogue:")
+                            play_audio(audio_content)
 
     # Handle generation
     if new_scene_button:
@@ -560,7 +657,8 @@ def main():
                 'processing': True,
                 'dialogue_lines': dialogue_lines,
                 'current_dialogue_index': 0,
-                'dialogue_offsets': {}
+                'dialogue_offsets': {},
+                'dialogue_audio': {}
             }
             
             # Start generating the first panel
@@ -617,8 +715,11 @@ def process_current_stage(character_description, background_description, seed):
             # Move directly to character stage
             st.session_state.scene_state['current_stage'] = 'character'
             
-            # Wait for 10 seconds before generating character
-            time.sleep(10)
+            # Wait for a moment before generating character (reduced if image generation is disabled)
+            if ENABLE_IMAGE_GENERATION:
+                time.sleep(10)
+            else:
+                time.sleep(1)  # Shorter wait time when image generation is disabled
             
             st.rerun()
         else:
