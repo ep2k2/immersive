@@ -315,24 +315,19 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
 def init_scene_state():
     """Initialize or reset the scene state in session."""
     default_state = {
-        'panels': {
-            'top_right': None,
-            'bottom_right': None,
-            'top_left': None,
-            'bottom_left': None
-        },
-        'panel_count': 0,                 # Track how many panels we've filled
-        'current_position': 'top_right',  # Start with top right panel
-        'current_stage': 'background',    # Start with background generation
-        'scene_background': None,         # Store the scene background for reuse
+        'panels': {},  # Empty dictionary to store panels
+        'panel_count': 0,
+        'current_position': 'panel_0',  # Simplified position naming
+        'current_stage': 'background',
+        'scene_background': None,
         'background_image': None,
         'character_image': None,
         'combined_image': None,
-        'processing': False,              # Flag to track if we're in the middle of processing
-        'dialogue_lines': [],             # Store dialogue lines
-        'current_dialogue_index': 0,      # Track which dialogue line we're on
-        'dialogue_offsets': {},           # Track vertical offsets for dialogue in each panel
-        'dialogue_audio': {}              # Store audio for each dialogue line
+        'processing': False,
+        'dialogue_lines': [],
+        'current_dialogue_index': 0,
+        'dialogue_offsets': {},
+        'dialogue_audio': {}
     }
     
     if 'scene_state' not in st.session_state:
@@ -432,7 +427,7 @@ def main():
     init_app()
     init_scene_state()
     
-    # Create two columns - left for inputs, right for image
+    # Create two columns - left for inputs, right for image display area
     left_col, right_col = st.columns([1, 2])  # 1:2 ratio for column widths
     
     # Check if we need to process dialogue (this happens before UI rendering)
@@ -531,11 +526,10 @@ def main():
         with col3:
             new_scene_button = st.button("New Scene")
         with col4:
-            # Enable next panel button only if we have a completed panel and fewer than 4 panels
+            # Enable next panel button only if we have a completed panel
             next_panel_button = st.button("Next panel", 
                                          disabled=st.session_state.scene_state['processing'] or 
-                                                 st.session_state.scene_state['current_stage'] != 'complete' or
-                                                 st.session_state.scene_state['panel_count'] >= 3)
+                                                 st.session_state.scene_state['current_stage'] != 'complete')
         with col5:
             # Process dialogue input and store in session state
             if dialogue:
@@ -564,61 +558,48 @@ def main():
         st.info("Processing your prompts...")
     
     with right_col:
-        # Create layout for manga panels
+        # Create layout for panels
         scene_container = st.container()
         with scene_container:
-            # Create a 2x2 grid for panels in the correct order
-            row1 = st.columns(2)
-            row2 = st.columns(2)
+            # Create columns for panel display
+            panel_left_col, panel_right_col = st.columns(2)
             
-            # Get columns in the right order for manga reading
-            tr_col = row1[0]  # Top-right (first position)
-            br_col = row2[0]  # Bottom-right (second position)
-            tl_col = row1[1]  # Top-left (third position)
-            bl_col = row2[1]  # Bottom-left (fourth position)
+            # Display all completed panels in alternating left-right pattern
+            panel_list = []
+            for position, image in st.session_state.scene_state['panels'].items():
+                if image is not None:
+                    panel_list.append(image)
             
-            # Display panels in manga order
-            with tr_col:
-                if st.session_state.scene_state['panels']['top_right'] is not None:
-                    st.image(st.session_state.scene_state['panels']['top_right'], use_container_width=True)
-            with br_col:
-                if st.session_state.scene_state['panels']['bottom_right'] is not None:
-                    st.image(st.session_state.scene_state['panels']['bottom_right'], use_container_width=True)
-            with tl_col:
-                if st.session_state.scene_state['panels']['top_left'] is not None:
-                    st.image(st.session_state.scene_state['panels']['top_left'], use_container_width=True)
-            with bl_col:
-                if st.session_state.scene_state['panels']['bottom_left'] is not None:
-                    st.image(st.session_state.scene_state['panels']['bottom_left'], use_container_width=True)
+            # Display panels in alternating left-right pattern
+            for i, panel in enumerate(panel_list):
+                if i % 2 == 0:  # Even index (0, 2, 4...) - left column
+                    with panel_left_col:
+                        st.image(panel, use_container_width=True)
+                else:  # Odd index (1, 3, 5...) - right column
+                    with panel_right_col:
+                        st.image(panel, use_container_width=True)
             
-            # Display current working image in the appropriate panel
-            current_position = st.session_state.scene_state['current_position']
+            # Display current working image in the appropriate column based on panel count
             current_image = None
-            
             if st.session_state.scene_state['current_stage'] == 'background':
                 current_image = st.session_state.scene_state['background_image']
             elif st.session_state.scene_state['current_stage'] in ['character', 'complete']:
                 current_image = st.session_state.scene_state['combined_image']
             
             if current_image is not None:
-                # Display in the current panel position
-                if current_position == 'top_right':
-                    with tr_col:
+                # Display in the next column based on panel count
+                if len(panel_list) % 2 == 0:  # Even number of panels so far, use left column
+                    with panel_left_col:
                         st.image(current_image, use_container_width=True)
-                elif current_position == 'bottom_right':
-                    with br_col:
+                else:  # Odd number of panels so far, use right column
+                    with panel_right_col:
                         st.image(current_image, use_container_width=True)
-                elif current_position == 'top_left':
-                    with tl_col:
-                        st.image(current_image, use_container_width=True)
-                elif current_position == 'bottom_left':
-                    with bl_col:
-                        st.image(current_image, use_container_width=True)
-
+            
             # Play the most recent audio if available
             if st.session_state.scene_state['current_dialogue_index'] > 0:
                 dialogue_index = st.session_state.scene_state['current_dialogue_index'] - 1
-                audio_key = f"{current_position}_{dialogue_index}"
+                current_pos = st.session_state.scene_state['current_position']
+                audio_key = f"{current_pos}_{dialogue_index}"
                 
                 if audio_key in st.session_state.scene_state['dialogue_audio']:
                     audio_content = st.session_state.scene_state['dialogue_audio'][audio_key]
@@ -627,7 +608,7 @@ def main():
                         audio_container = st.container()
                         with audio_container:
                             st.write("Audio for current dialogue:")
-                            play_audio(audio_content)  # Ensure this is called in the right context
+                            play_audio(audio_content)
 
     # Handle generation
     if new_scene_button:
@@ -641,14 +622,9 @@ def main():
                 
             # Reset scene state for new scene
             st.session_state.scene_state = {
-                'panels': {
-                    'top_right': None,
-                    'bottom_right': None,
-                    'top_left': None,
-                    'bottom_left': None
-                },
+                'panels': {},  # Empty dictionary to store panels
                 'panel_count': 0,
-                'current_position': 'top_right',
+                'current_position': 'panel_0',  # Simplified position naming
                 'current_stage': 'background',
                 'scene_background': None,
                 'background_image': None,
@@ -671,8 +647,8 @@ def main():
             st.session_state.scene_state['panels'][current_pos] = st.session_state.scene_state['combined_image']
             st.session_state.scene_state['panel_count'] += 1
             
-            # Move to the next panel position
-            next_pos = get_next_panel_position()
+            # Create a new panel position
+            next_pos = f"panel_{st.session_state.scene_state['panel_count']}"
             st.session_state.scene_state['current_position'] = next_pos
             st.session_state.scene_state['current_stage'] = 'character'  # Skip background generation
             st.session_state.scene_state['background_image'] = st.session_state.scene_state['scene_background']  # Reuse background
