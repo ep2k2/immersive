@@ -10,7 +10,6 @@ import random  # Import random for generating random seeds
 import cv2
 import numpy as np
 import textwrap
-
 # Feature flags for development
 ENABLE_IMAGE_GENERATION = True  # Set to False to skip image generation (background and character)
 ENABLE_AUDIO_GENERATION = True  # Set to False to skip audio generation for dialogue
@@ -18,10 +17,10 @@ ENABLE_AUDIO_GENERATION = True  # Set to False to skip audio generation for dial
 def init_app():
     """Initialize the Streamlit app with basic configuration."""
     st.set_page_config(
-        page_title="LLM Image Generator",
+        page_title="日常のスケッチ-EXP",
         layout="wide"
     )
-    st.title("LLM Image Generator")
+    st.title("日常のスケッチ-EXP 📅🖼️")
     return True
 
 def generate_image(prompt, steps=4, seed=None):
@@ -254,7 +253,6 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
         except:
             font = ImageFont.load_default()  # Last resort fallback
     
-    # Make bubbles much wider - increase max_width significantly
     max_width_adjusted = 60  # Much wider to avoid unnecessary wrapping
     wrapped_text = textwrap.fill(text, width=max_width_adjusted)
     lines = wrapped_text.split('\n')
@@ -427,13 +425,38 @@ def play_audio(audio_content):
         audio_file = BytesIO(audio_content)
         st.audio(audio_file, format='audio/wav')
 
+def play_audio_with_autoplay(audio_content):
+    """Play audio content in Streamlit with autoplay."""
+    if audio_content:
+        # Create an HTML audio element with autoplay
+        audio_bytes = base64.b64encode(audio_content).decode()
+        audio_html = f"""
+        <audio autoplay controls>
+            <source src="data:audio/wav;base64,{audio_bytes}" type="audio/wav">
+            Your browser does not support the audio element.
+        </audio>
+        <script>
+            // This ensures the audio only autoplays once per session
+            const audioElements = document.getElementsByTagName("audio");
+            const latestAudio = audioElements[audioElements.length - 1];
+            
+            // Check if this audio has already been played
+            const audioId = "{hash(audio_bytes) % 10000000}";
+            if (!sessionStorage.getItem("played_" + audioId)) {{
+                latestAudio.play().catch(e => console.log("Autoplay prevented:", e));
+                sessionStorage.setItem("played_" + audioId, "true");
+            }}
+        </script>
+        """
+        st.markdown(audio_html, unsafe_allow_html=True)
+
 def main():
     """Main function to run the Streamlit app."""
     init_app()
     init_scene_state()
     
     # Create two columns - left for inputs, right for image
-    left_col, right_col = st.columns([1, 2])  # 1:2 ratio for column widths
+    left_col, right_col = st.columns([1, 3])  # 1:3 ratio for column widths
     
     # Check if we need to process dialogue (this happens before UI rendering)
     if 'process_dialogue' in st.session_state and st.session_state.process_dialogue:
@@ -463,6 +486,9 @@ def main():
             audio_key = f"{current_pos}_{dialogue_index}"
             st.session_state.scene_state['dialogue_audio'][audio_key] = audio_content
             
+            # Add a flag to indicate this is a new audio that should autoplay
+            st.session_state.scene_state['new_audio_key'] = audio_key
+            
             # Update the dialogue index and offset
             st.session_state.scene_state['current_dialogue_index'] += 1
             st.session_state.scene_state['dialogue_offsets'][current_pos] += 60
@@ -470,6 +496,9 @@ def main():
         # Reset the processing flags
         st.session_state.process_dialogue = False
         st.session_state.scene_state['processing'] = False
+    
+    # Create a dedicated audio container at the top of the page, before the columns
+    audio_container = st.container()
     
     # Continue with the rest of the UI rendering
     with left_col:
@@ -614,20 +643,27 @@ def main():
                 elif current_position == 'bottom_left':
                     with bl_col:
                         st.image(current_image, use_container_width=True)
-            
-            # Play the most recent audio if available
-            if st.session_state.scene_state['current_dialogue_index'] > 0:
-                dialogue_index = st.session_state.scene_state['current_dialogue_index'] - 1
-                audio_key = f"{current_position}_{dialogue_index}"
-                
-                if audio_key in st.session_state.scene_state['dialogue_audio']:
-                    audio_content = st.session_state.scene_state['dialogue_audio'][audio_key]
-                    if audio_content:
-                        # Create a container for the audio player
-                        audio_container = st.container()
-                        with audio_container:
-                            st.write("Audio for current dialogue:")
-                            play_audio(audio_content)
+    
+    # Play the most recent audio if available - moved outside the column layout
+    if st.session_state.scene_state['current_dialogue_index'] > 0:
+        dialogue_index = st.session_state.scene_state['current_dialogue_index'] - 1
+        audio_key = f"{current_position}_{dialogue_index}"
+        
+        if audio_key in st.session_state.scene_state['dialogue_audio']:
+            audio_content = st.session_state.scene_state['dialogue_audio'][audio_key]
+            if audio_content:
+                # Use the dedicated audio container at the top
+                with audio_container:
+                    st.write("Audio for current dialogue:")
+                    
+                    # Check if this is the newly added audio that should autoplay
+                    if 'new_audio_key' in st.session_state.scene_state and st.session_state.scene_state['new_audio_key'] == audio_key:
+                        play_audio_with_autoplay(audio_content)
+                        # Clear the new audio flag after playing
+                        st.session_state.scene_state['new_audio_key'] = None
+                    else:
+                        # Use regular audio player for previously played audio
+                        play_audio(audio_content)
 
     # Handle generation
     if new_scene_button:
