@@ -603,8 +603,11 @@ def main():
                 st.session_state.chat_history = []
                 st.session_state.scene_state['current_dialogue_index'] = 0
                 
+                # Don't reset study_word_focus if it contains user-entered words
+                # Get the current study words from the text area
+                current_study_words = study_word_focus.strip()
+                
                 # Reset other relevant session state variables
-                st.session_state.study_word_focus = ""
                 st.session_state.scene_state['dialogue_lines'] = []
                 st.session_state.scene_state['current_position'] = 'panel_0'
                 st.session_state.scene_state['current_stage'] = 'background'
@@ -614,16 +617,53 @@ def main():
                 with open('seed_data/LLM_prompt.md', 'r', encoding='utf-8') as file:
                     prompt_template = file.read().strip()
                 
-                # Feed the prompt to the Gemini API
-                response = call_gemini_api(prompt_template)
+                # If the user has entered study words, include them in the prompt
+                if current_study_words:
+                    add_debug_message(f"Using user-provided word list: {current_study_words}")
+                    # Create a modified prompt that includes the user's word list
+                    prompt_with_words = f"The user has provided the following study words:\n\n{current_study_words}\n\n{prompt_template}"
+                    response = call_gemini_api(prompt_with_words)
+                else:
+                    # If no words provided, let Gemini generate them as usual
+                    add_debug_message("No user-provided word list, Gemini will generate one")
+                    response = call_gemini_api(prompt_template)
+                
                 st.session_state.chat_history.append({"role": "assistant", "content": response})
                 
                 # Store the response in llm_response and set the flag to process it
                 st.session_state.llm_response = response
                 st.session_state.process_llm_response = True
                 
+                # Process the response immediately to ensure widgets are populated on first click
+                # This helps bypass the need for a second click
+                raw_response = response
+                llm_response = parse_llm_response(raw_response)
+                
+                if llm_response is not None and llm_response.get("panel-number") == 0:
+                    # Extract values from the setup response
+                    word_list = llm_response["setup"]["word-list"]
+                    image_seed = llm_response["setup"]["image-seed"]
+                    scenario_description_english = llm_response["setup"]["scenario-description-english"]
+                    background_image_prompt_english = llm_response["setup"]["background-image-prompt-english"]
+                    introduction_english = llm_response["setup"]["introduction-english"]
+                    
+                    # Update session state with the extracted values
+                    st.session_state.word_list = word_list
+                    st.session_state.image_seed = image_seed
+                    st.session_state.scenario_description_english = scenario_description_english
+                    st.session_state.background_image_prompt_english = background_image_prompt_english
+                    st.session_state.introduction_english = introduction_english
+                    
+                    # Convert word list to a newline-separated string for display in the text area
+                    st.session_state.study_word_focus = "\n".join(word_list)
+                    
+                    # Update both seed and seed_value in session state
+                    st.session_state.seed = image_seed
+                    st.session_state.seed_value = image_seed
+                
                 st.success("New scenario generated successfully!")
-                # No need to rerun here - the process_llm_response flag will handle it
+                # Force a rerun to ensure all widgets update with the new values
+                st.rerun()
             except Exception as e:
                 st.error(f"Error generating scenario: {str(e)}")
 
