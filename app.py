@@ -15,7 +15,7 @@ import google.generativeai as genai
 import json
 
 # Feature flags for development
-ENABLE_IMAGE_GENERATION = True  # Set to False to skip image generation (background and character)
+ENABLE_IMAGE_GENERATION = False # Set to False to skip image generation (background and character)
 ENABLE_AUDIO_GENERATION = False # Set to False to skip audio generation for dialogue
 
 DEBUG_MODE = True  # Set to True to enable debug output
@@ -239,7 +239,7 @@ def fade_transition(placeholder, old_image, new_image, steps=5):
         # Shorter delay for faster animation (0.5 seconds total for 5 steps = 0.1 seconds per step)
         time.sleep(0.1)  # Updated delay for faster transition
 
-def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_y=0, weight='regular'):
+def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_y=0, weight='regular', is_ai=True):
     """Create a speech bubble with text on the image."""
     # Create a copy of the image to draw on
     img_with_bubble = image.copy()
@@ -282,14 +282,23 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
     # Calculate image dimensions
     img_width, img_height = img_with_bubble.size
     
-    # Start position closer to top, with offset based on dialogue index
-    # Position centered at 1/3 of the way across the panel
-    base_x = img_width // 3
-    base_y = 40  # Start closer to the top (was 80)
+    # Set bubble position based on whether it's AI or user dialogue
+    if is_ai:
+        # AI dialogue: left aligned near the left edge
+        base_x = bubble_width // 2 + 40  # Left aligned with margin
+    else:
+        # User dialogue: right aligned near the right edge
+        base_x = img_width - bubble_width // 2 - 40  # Right aligned with margin
+    
+    base_y = 40  # Start closer to the top
     
     # Apply only a small horizontal variation to keep bubbles more aligned
-    # Use a smaller fraction of the width for horizontal shift
-    horizontal_shift = ((offset_y // 60) % 3 - 1) * (img_width // 10)  # Reduced from 1/5 to 1/10
+    if is_ai:
+        # Less horizontal variation for AI bubbles to keep them aligned left
+        horizontal_shift = ((offset_y // 60) % 2) * (img_width // 20)
+    else:
+        # More horizontal variation for user bubbles
+        horizontal_shift = -((offset_y // 60) % 2) * (img_width // 20)
     
     # Adjust position based on offset with smaller vertical increments
     position = (base_x + horizontal_shift, base_y + offset_y)
@@ -304,20 +313,32 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
     right = x + bubble_width // 2
     bottom = y + bubble_height // 2
     
+    # Set bubble and text colors based on whether it's AI or user dialogue
+    if is_ai:
+        # AI dialogue: dark green (jade)
+        bubble_color = (0, 100, 80, 230)  # Dark green (jade) with transparency
+        text_color = (255, 255, 255)  # White text for contrast
+        outline_color = (0, 80, 60)  # Darker green for outline
+    else:
+        # User dialogue: dark orange
+        bubble_color = (180, 80, 0, 230)  # Dark orange with transparency
+        text_color = (255, 255, 255)  # White text for contrast
+        outline_color = (150, 60, 0)  # Darker orange for outline
+        
     # Draw bubble with rounded corners
     corner_radius = 20
     draw.rounded_rectangle([left, top, right, bottom], 
-                          fill=(255, 255, 255, 230), 
-                          outline=(0, 0, 0), 
-                          width=2, 
-                          radius=corner_radius)
+                           fill=bubble_color, 
+                           outline=outline_color, 
+                           width=2, 
+                           radius=corner_radius)
     
     # Draw text in bubble
     y_text = top + padding
     for line in lines:
         line_width = draw.textbbox((0, 0), line, font=font)[2]
         x_text = left + (bubble_width - line_width) // 2
-        draw.text((x_text, y_text), line, font=font, fill=(0, 0, 0))
+        draw.text((x_text, y_text), line, font=font, fill=text_color)
         y_text += line_heights[0]  # Assuming all lines have same height
     
     return img_with_bubble
@@ -353,15 +374,69 @@ def init_scene_state():
         add_debug_message(f"Note: {str(e)}")
         # The session state will be properly initialized when the app fully loads
 
-def process_dialogue(dialogue_line, current_image, current_offset):
-    """Process a dialogue line and add it to the current image."""
-    # Create a speech bubble with the dialogue
-    new_image = create_speech_bubble(current_image, dialogue_line, offset_y=current_offset)
+def process_dialogue(dialogue_line, current_image, current_offset, is_ai=True):
+    """Process a dialogue line and add it to the current image.
     
-    # Generate audio for the dialogue line
-    audio_content = generate_speech(dialogue_line)
+    Args:
+        dialogue_line: The text to display in the speech bubble
+        current_image: The current panel image
+        current_offset: Vertical offset for positioning the bubble
+        is_ai: Whether the dialogue is from the AI (True) or user (False)
+    
+    Returns:
+        Tuple of (new_image, audio_content)
+    """
+    # Create a speech bubble with the dialogue, specifying if it's AI or user
+    new_image = create_speech_bubble(current_image, dialogue_line, offset_y=current_offset, is_ai=is_ai)
+    
+    # Generate audio for the dialogue line (only for AI dialogue)
+    audio_content = None
+    if is_ai:
+        audio_content = generate_speech(dialogue_line)
     
     return new_image, audio_content
+
+def add_dialogue_to_panel(dialogue_line, is_ai=True):
+    """Add a dialogue line to the current panel.
+    
+    Args:
+        dialogue_line: The text to display in the speech bubble
+        is_ai: Whether the dialogue is from the AI (True) or user (False)
+    """
+    # Only proceed if we have a valid panel and dialogue line
+    if not dialogue_line or not st.session_state.scene_state.get('combined_image'):
+        return
+    
+    # Get the current panel position
+    current_pos = st.session_state.scene_state.get('current_position')
+    if not current_pos:
+        return
+    
+    # Initialize offset tracking for this panel if needed
+    if current_pos not in st.session_state.scene_state['dialogue_offsets']:
+        st.session_state.scene_state['dialogue_offsets'][current_pos] = 0
+    
+    # Get current offset for this panel
+    current_offset = st.session_state.scene_state['dialogue_offsets'][current_pos]
+    
+    # Process the dialogue and get audio
+    current_image = st.session_state.scene_state['combined_image']
+    new_image, audio_content = process_dialogue(dialogue_line, current_image, current_offset, is_ai=is_ai)
+    
+    # Update the combined image with the speech bubble
+    st.session_state.scene_state['combined_image'] = new_image
+    
+    # Store the audio content if available (only for AI dialogue)
+    if audio_content and is_ai:
+        dialogue_index = st.session_state.scene_state.get('current_dialogue_index', 0)
+        audio_key = f"{current_pos}_{dialogue_index}"
+        st.session_state.scene_state['dialogue_audio'][audio_key] = audio_content
+        # Update the dialogue index
+        st.session_state.scene_state['current_dialogue_index'] = dialogue_index + 1
+    
+    # Increment the offset for the next dialogue bubble with a smaller increment for slight overlap
+    # Use a smaller increment (40-45 pixels) to create a slight overlap between bubbles
+    st.session_state.scene_state['dialogue_offsets'][current_pos] += 45
 
 def generate_speech(text):
     """Generate speech audio from text using Google's Text-to-Speech API."""
@@ -569,7 +644,8 @@ def main():
             
             # Process the dialogue and get audio
             current_image = st.session_state.scene_state['combined_image']
-            new_image, audio_content = process_dialogue(dialogue_line, current_image, current_offset)
+            # For AI dialogue, pass is_ai=True
+            new_image, audio_content = process_dialogue(dialogue_line, current_image, current_offset, is_ai=True)
             
             # Update the combined image with the speech bubble
             st.session_state.scene_state['combined_image'] = new_image
@@ -894,6 +970,10 @@ def main():
                 # Add user message to chat history
                 st.session_state.chat_history.append({"role": "user", "content": user_input})
                 
+                # Add user dialogue to the panel
+                user_dialogue = f"[You]: {user_input}"
+                add_dialogue_to_panel(user_dialogue, is_ai=False)
+                
                 # Create a prompt for the next dialogue line
                 current_panel = st.session_state.scene_state.get('current_position', 'panel_1')
                 current_dialogue_index = st.session_state.scene_state.get('current_dialogue_index', 0)
@@ -931,6 +1011,10 @@ def main():
                     dialogue_line = dialogue_data["dialogue-line-japanese"]
                     # Store the dialogue line in session state
                     st.session_state.dialogue_japanese = dialogue_line
+                    
+                    # Add AI dialogue to the panel
+                    ai_dialogue = f"[AI]: {dialogue_line}"
+                    add_dialogue_to_panel(ai_dialogue, is_ai=True)
                 
                 # Add AI response to chat history with both the full response and the extracted dialogue line
                 st.session_state.chat_history.append({

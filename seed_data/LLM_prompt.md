@@ -54,7 +54,16 @@ Engage in a conversation lasting 4–6 panels total. Each panel contains 3–5 e
 
 For each panel:
 
-Begin with a new character image prompt describing the character's appearance and relevant actions or emotions (e.g., "A Japanese female friend is waiting and glancing at her watch. She has short hair, square glasses, and is wearing dungarees."). This prompt reflects a story progression (e.g., a change in emotion or activity) and remains constant throughout the panel's 3–5 exchanges. Avoid describing colors or patterns unless explicitly specified as plain (e.g., "a plain baseball cap"). Style information will be added by the app later.
+Begin with a new character image prompt describing the character's appearance and relevant actions or emotions. This prompt reflects a story progression (e.g., a change in emotion or activity) and remains constant throughout the panel's 3–5 exchanges.
+
+**Character Image Prompt Guidelines:**
+
+***Focus:** Describe *only* the character. Do *not* include environmental details, positioning (e.g., "in front of"), or background elements.
+*   **Appearance:** Specify the character's age, gender, and general appearance (e.g., height, build, hairstyle). Assume characters are Japanese unless the scenario explicitly indicates otherwise.
+*   **Clothing:** Describe clothing in general terms (e.g., "a jacket," "a dress," "dungarees"). Omit specific colors and patterns.
+*   **Exceptions for Patterns:** If an item is *typically* patterned or branded (e.g., a baseball cap, a yukata), specify if it is *plain* (e.g., "a plain baseball cap," "a plain yukata").
+*   **Actions and Emotions:** Briefly describe the character's current action or emotion (e.g., "waiting and glancing at her watch," "smiling proudly," "looking focused").
+*   **Omissions:** *Never* include colors (e.g., "red," "blue"), patterns (e.g., "floral," "striped"), or style information (e.g., "watercolor," "realistic"). These details will be added by the app later.
 
 Provide the first dialogue line in Japanese, spoken by the character, using at least one study word naturally in the first panel and incorporating others where appropriate without forcing them unnaturally. Example: "ああ、やっと来たね。急いで、遅れているよ。" – "Oh, you're finally here. Hurry up, we're late!"
 
@@ -111,7 +120,7 @@ Output after completing 3–5 exchanges and starting a new panel:
 - describe the character only, specifying age, gender, and appearance
 - characters will almost always be Japanese as this is an immersion Japanese learning activity based on living in Japan 
 - *never* describe the environment or the character's position within the scene
-- *never* include colours or patterns e.g. don't say "a red blouse", a "floral dress", "short brown hair" or anything similar in the character description, instead simply use "a blouse", "a dress", "short hair" 
+- *never* include colours or patterns e.g. don't say "a red blouse", a "floral dress", "short black hair" or anything similar in the character description, instead simply use "a blouse", "a dress", "short hair" 
 - you should specify plain if this item is normally patterned or has a logo e.g. do say "a plain baseball cap" or "a plain yukata" as examples
 - *never* include style information e.g. watercolour or realistic in the character description as this will be added by the app later
 
