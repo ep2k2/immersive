@@ -10,17 +10,19 @@ import random  # Import random for generating random seeds
 import cv2
 import numpy as np
 import textwrap
-
-# Predefined prompt variables
-LLM_PROMPT_TEMPLATE = "Generate a manga panel with a character and a background. The character should be described as follows: {character_description}. The background should be described as follows: {background_description}. The background style should be described as follows: {background_style_suffix}."
-LLM_PROMPT_CHARACTER_EXAMPLE = "a Japanese woman smiling widely, short hair, square glasses, wearing dungarees"
-LLM_PROMPT_CHARACTER_STYLE = ", isolated, pure white canvas, no environment, thick outline, pointilism pencil sketch with cross-hatch shading in blue tones, frame from waist and include all of the head"
-LLM_PROMPT_BACKGROUND_EXAMPLE = "outside a theatre in a Japanese city"
-LLM_PROMPT_SUFFIX_BACKGROUND_STYLE = ",detailed blue pencil sketch with bold dark block shading"
+import google.generativeai as genai
+import json
 
 # Feature flags for development
 ENABLE_IMAGE_GENERATION = False  # Set to False to skip image generation (background and character)
-ENABLE_AUDIO_GENERATION = True  # Set to False to skip audio generation for dialogue
+ENABLE_AUDIO_GENERATION = False # Set to False to skip audio generation for dialogue
+
+DEBUG_MODE = True  # Set to True to enable debug output
+
+def add_debug_message(message):
+    """Print debug message to terminal if debug mode is enabled."""
+    if DEBUG_MODE:
+        print("DEBUG:", message)  # Print to terminal for reference
 
 def init_app():
     """Initialize the Streamlit app with basic configuration."""
@@ -345,18 +347,6 @@ def init_scene_state():
             if key not in st.session_state.scene_state:
                 st.session_state.scene_state[key] = value
 
-def get_next_panel_position(current_position=None):
-    """Get the next panel position in manga reading order."""
-    # Japanese manga reading order: top-right → bottom-right → top-left → bottom-left
-    order = ['top_right', 'bottom_right', 'top_left', 'bottom_left']
-    
-    if current_position is None:
-        current_position = st.session_state.scene_state['current_position']
-    
-    current_index = order.index(current_position)
-    next_index = (current_index + 1) % len(order)
-    return order[next_index]
-
 def process_dialogue(dialogue_line, current_image, current_offset):
     """Process a dialogue line and add it to the current image."""
     # Create a speech bubble with the dialogue
@@ -429,10 +419,99 @@ def play_audio(audio_content):
         audio_file = BytesIO(audio_content)
         st.audio(audio_file, format='audio/wav', autoplay=True)  # Set autoplay to True
 
+def parse_llm_response(raw_response):
+    """Extract and parse the JSON from the LLM response."""
+    try:
+        # Find the start and end of the JSON object
+        start_index = raw_response.index('{')
+        end_index = raw_response.rindex('}') + 1
+        
+        # Extract the JSON string
+        json_string = raw_response[start_index:end_index]
+        
+        add_debug_message(f"Extracted JSON String: {json_string}")  # Debugging line
+        
+        # Parse the JSON string into a Python dictionary
+        return json.loads(json_string)
+    
+    except ValueError as e:
+        add_debug_message(f"Error parsing JSON: {e}")
+        return None  # Return None if parsing fails
+
 def main():
     """Main function to run the Streamlit app."""
     init_app()
     init_scene_state()
+    
+    # Add a debug message for the current time
+    add_debug_message(f"Debug: Current time: {time.strftime('%H:%M:%S')}")
+    
+    # Check for process_llm_response flag or incoming response from LLM
+    if 'process_llm_response' in st.session_state and st.session_state.process_llm_response:
+        # Reset the flag immediately to prevent infinite loops
+        st.session_state.process_llm_response = False
+        
+        # Check if we have an LLM response to process
+        if 'llm_response' in st.session_state and st.session_state.llm_response:
+            raw_response = st.session_state.llm_response
+            
+            # Debug the raw LLM response
+            add_debug_message("Checking LLM Response")
+            add_debug_message("LLM Response is present")
+            add_debug_message(f"Raw LLM Response: {raw_response}")
+            
+            # Use the parsing function
+            llm_response = parse_llm_response(raw_response)
+            
+            # Debug the parsed LLM response
+            add_debug_message("LLM Response parsed")
+            add_debug_message(f"Parsed LLM Response: {llm_response}")
+            
+            if llm_response is not None and llm_response.get("panel-number") == 0:
+                # Extract values from the setup response
+                word_list = llm_response["setup"]["word-list"]
+                image_seed = llm_response["setup"]["image-seed"]
+                scenario_description_english = llm_response["setup"]["scenario-description-english"]
+                background_image_prompt_english = llm_response["setup"]["background-image-prompt-english"]
+                introduction_english = llm_response["setup"]["introduction-english"]
+                
+                # Print extracted values for debugging
+                add_debug_message(f"Word List: {word_list}")
+                add_debug_message(f"Image Seed: {image_seed}")
+                add_debug_message(f"Scenario Description (English): {scenario_description_english}")
+                add_debug_message(f"Background Image Prompt (English): {background_image_prompt_english}")
+                add_debug_message(f"Introduction (English): {introduction_english}")
+                
+                # Update session state with the extracted values
+                st.session_state.word_list = word_list
+                st.session_state.image_seed = image_seed
+                st.session_state.scenario_description_english = scenario_description_english
+                st.session_state.background_image_prompt_english = background_image_prompt_english
+                st.session_state.introduction_english = introduction_english
+                
+                # Convert word list to a newline-separated string for display in the text area
+                st.session_state.study_word_focus = "\n".join(word_list)
+                
+                # IMPORTANT: Update both seed and seed_value in session state
+                st.session_state.seed = image_seed
+                st.session_state.seed_value = image_seed  # Add this line to ensure the value is stored
+                
+                # Display the scenario description and introduction
+                st.success(f"Scenario: {scenario_description_english}")
+                st.info(f"Introduction: {introduction_english}")
+                
+                # Clear the LLM response to prevent reprocessing
+                st.session_state.llm_response = None
+                
+                # Force a rerun to ensure all widgets update with the new values
+                st.rerun()
+            else:
+                # Clear invalid response
+                st.session_state.llm_response = None
+        else:
+            add_debug_message("No valid LLM response found in session state.")
+    else:
+        add_debug_message("No LLM response processing flag set.")
     
     # Create two columns - left for inputs, right for image display area
     left_col, right_col = st.columns([1, 2])  # 1:2 ratio for column widths
@@ -481,23 +560,72 @@ def main():
                     words = file.read().strip()
                     st.session_state.study_word_focus = words  # Store in session state
                     st.success("JLPT5 word list loaded successfully!")
+                    st.rerun()  # Force a rerun to update the UI
             except Exception as e:
                 st.error(f"Error loading word list: {str(e)}")
 
-        # Study word focus
+        # Study word focus - display the word list from the LLM response
         study_word_focus = st.text_area(
             "Study word focus:",
-            height=100,
-            value=st.session_state.get('study_word_focus', ""),  # Set the value from session state
+            height=150,
+            value=st.session_state.get('study_word_focus', ""),
             placeholder="Enter words or phrases to focus on..."
         )
         
-        # Button to call Gemini for a scenario
-        if st.button("Call Gemini for a Scenario"):
-            # Implement the logic to call Gemini API or function here
-            scenario = call_gemini_api()  # Replace with your actual function
-            st.session_state.study_word_focus = scenario  # Store the scenario in the text area
-            st.success("Scenario generated successfully!")
+        # Display scenario description in a new widget
+        scenario_description = st.text_area(
+            "Scenario:",
+            height=80,
+            value=st.session_state.get('scenario_description_english', ""),
+            placeholder="Scenario description will appear here..."
+        )
+        
+        # Display introduction in a new widget
+        introduction = st.text_area(
+            "Introduction:",
+            height=100,
+            value=st.session_state.get('introduction_english', ""),
+            placeholder="Introduction will appear here..."
+        )
+        
+        # Background description - display the background prompt from the LLM response
+        background_description = st.text_area(
+            "Background description:",
+            height=100,
+            value=st.session_state.get('background_image_prompt_english', ""),
+            placeholder='e.g., "outside a theatre in a Japanese city"'
+        )
+        
+        # Combined button to call Gemini for a new scenario
+        if st.button("Call Gemini for a New Scenario"):
+            try:
+                # Clear chat history
+                st.session_state.chat_history = []
+                st.session_state.scene_state['current_dialogue_index'] = 0
+                
+                # Reset other relevant session state variables
+                st.session_state.study_word_focus = ""
+                st.session_state.scene_state['dialogue_lines'] = []
+                st.session_state.scene_state['current_position'] = 'panel_0'
+                st.session_state.scene_state['current_stage'] = 'background'
+                st.session_state.scene_state['processing'] = False
+                
+                # Read the LLM prompt template from file
+                with open('seed_data/LLM_prompt.md', 'r', encoding='utf-8') as file:
+                    prompt_template = file.read().strip()
+                
+                # Feed the prompt to the Gemini API
+                response = call_gemini_api(prompt_template)
+                st.session_state.chat_history.append({"role": "assistant", "content": response})
+                
+                # Store the response in llm_response and set the flag to process it
+                st.session_state.llm_response = response
+                st.session_state.process_llm_response = True
+                
+                st.success("New scenario generated successfully!")
+                # No need to rerun here - the process_llm_response flag will handle it
+            except Exception as e:
+                st.error(f"Error generating scenario: {str(e)}")
 
         seed_label_col, seed_input_col = st.columns([1, 3])
         with seed_label_col:
@@ -510,12 +638,29 @@ def main():
                 seed_value = random.randint(0, 10000)
                 # Reset the flag
                 st.session_state.randomize_seed = False
+                # Update the session state
+                st.session_state.seed = seed_value
+                st.session_state.seed_value = seed_value
             else:
-                # Use existing seed value
+                # Use existing seed value from session state
+                # IMPORTANT: Ensure we're getting the most up-to-date seed value
                 seed_value = st.session_state.get('seed', 0)
+                add_debug_message(f"Using seed value from session state: {seed_value}")
             
             # Use a number input with the seed value (no label)
-            st.session_state.seed = st.number_input("Seed", min_value=0, max_value=10000, value=seed_value, format="%d", key="seed_input", label_visibility="collapsed")
+            # IMPORTANT: Use a unique key for this widget to avoid conflicts
+            seed_input = st.number_input(
+                "Seed", 
+                min_value=0, 
+                max_value=10000, 
+                value=seed_value,  # Use the value from session state
+                format="%d", 
+                key=f"seed_input_{time.time()}",  # Use a unique key based on time
+                label_visibility="collapsed"
+            )
+            
+            # Update the session state with the widget value
+            st.session_state.seed = seed_input
         
         # Randomize button directly underneath the seed input
         if st.button("🎲 Randomize"):
@@ -527,28 +672,16 @@ def main():
         # Character description with predefined prompt
         character_description = st.text_area(
             "Enter character description:",
-            height=150,
+            height=100,
             placeholder='e.g., "a Japanese woman smiling widely, short hair, square glasses, wearing dungarees"'
         )
         
-        # Background description with predefined prompt
-        background_description = st.text_area(
-            "Enter background description:",
-            height=150,
-            placeholder='e.g., "outside a theatre in a Japanese city"'
-        )
-        
-        # Background style suffix with predefined prompt
-        background_style_suffix = st.text_area(
-            "Enter background style suffix:",
-            height=100,
-            placeholder='e.g., "detailed blue pencil sketch with bold dark block shading"'
-        )
+        # This section was moved above, after the introduction field
 
         # Dialogue input with predefined prompt
         dialogue = st.text_area(
             "Enter dialogue:",
-            height=100,
+            height=80,
             placeholder='e.g., "What a beautiful day!"'
         )
         
@@ -589,6 +722,51 @@ def main():
         st.info("Processing your prompts...")
     
     with right_col:
+        # Add chat window at the top of the right column
+        st.subheader("Gemini conversation...")
+        
+        # Create a container for the chat history with fixed height and scrolling
+        chat_container = st.container(height=300, border=True)
+        
+        # Initialize chat history if it doesn't exist
+        if 'chat_history' not in st.session_state:
+            st.session_state.chat_history = []
+        
+        # Display chat history in the container
+        with chat_container:
+            for message in st.session_state.chat_history:
+                if message["role"] == "user":
+                    st.markdown(f"**You:** {message['content']}")
+                else:
+                    st.markdown(f"**AI:** {message['content']}")
+        
+        # Create a form for the chat input to handle submission properly
+        with st.form(key="chat_form", clear_on_submit=True):
+            # Chat input field
+            user_input = st.text_input("Type your message:")
+            
+            # Submit button
+            submit_button = st.form_submit_button("Send")
+            
+            if submit_button and user_input:
+                # Add user message to chat history
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
+                
+                # Call Gemini for a response
+                response = call_gemini_api(user_input)
+                
+                # Add AI response to chat history
+                st.session_state.chat_history.append({"role": "assistant", "content": response})
+                
+                # Check if the response contains JSON that should be processed
+                if '{' in response and '}' in response:
+                    # Store the response in llm_response and set the flag to process it
+                    st.session_state.llm_response = response
+                    st.session_state.process_llm_response = True
+                
+                # Force a rerun to update the chat history
+                st.rerun()
+        
         # Create layout for panels
         scene_container = st.container()
         with scene_container:
@@ -684,8 +862,8 @@ def main():
             st.session_state.scene_state['current_stage'] = 'character'  # Skip background generation
             st.session_state.scene_state['background_image'] = st.session_state.scene_state['scene_background']  # Reuse background
             st.session_state.scene_state['character_image'] = None
-            st.session_state.scene_state['combined_image'] = None
-            st.session_state.scene_state['processing'] = True
+            st.session_state['combined_image'] = None
+            st.session_state['processing'] = True
             
             st.rerun()
         else:
@@ -702,7 +880,11 @@ def main():
     
     # Process the current stage if we're in processing mode
     if st.session_state.scene_state['processing']:
-        process_current_stage(character_description, background_description, st.session_state.seed)
+        should_continue = process_current_stage(character_description, background_description, st.session_state.seed)
+        
+        # If processing was successful and we need to continue to the next stage, rerun the app
+        if should_continue:
+            st.rerun()
 
 def process_current_stage(character_description, background_description, seed):
     """Process the current stage of scene generation."""
@@ -728,10 +910,12 @@ def process_current_stage(character_description, background_description, seed):
             else:
                 time.sleep(1)  # Shorter wait time when image generation is disabled
             
-            st.rerun()
+            # Return True to indicate successful processing and that we should continue
+            return True
         else:
             st.error("Failed to generate background image.")
             st.session_state.scene_state['processing'] = False
+            return False
     
     elif current_stage == 'character':
         # Generate character image
@@ -749,16 +933,37 @@ def process_current_stage(character_description, background_description, seed):
             st.session_state.scene_state['current_stage'] = 'complete'
             st.session_state.scene_state['processing'] = False
             
-            st.rerun()
+            # Return True to indicate successful processing
+            return True
         else:
             st.error("Failed to generate character image.")
             st.session_state.scene_state['processing'] = False
+            return False
 
-# Function to call Gemini API (placeholder)
-def call_gemini_api():
-    # Implement the actual API call logic here
-    # For example, return a generated scenario
-    return "Generated scenario from Gemini API."
+# Update the call_gemini_api function to accept a prompt parameter
+def call_gemini_api(prompt):
+    """Call the Gemini API with the given prompt."""
+    try:
+        # Load environment variables
+        load_dotenv()
+        
+        # Configure Gemini
+        api_key = os.getenv('GOOGLE_GEMINI_API_KEY')
+        if not api_key:
+            raise ValueError("GOOGLE_GEMINI_API_KEY not found in .env file")
+        
+        genai.configure(api_key=api_key)
+        
+        # Create a model instance
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Generate a response based on the prompt
+        response = model.generate_content(prompt)  # Removed output_format parameter
+        
+        return response.text  # Assuming response.text contains the desired output
+    except Exception as e:
+        print(f"Error calling Gemini API: {str(e)}")
+        return f"Error generating response: {str(e)}"
 
 if __name__ == "__main__":
     main() 
