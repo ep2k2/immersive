@@ -1,6 +1,7 @@
 import streamlit as st
 import os
 import requests  # Import the requests library
+import re  # Import regular expressions module
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
@@ -339,13 +340,18 @@ def init_scene_state():
         'dialogue_audio': {}
     }
     
-    if 'scene_state' not in st.session_state:
-        st.session_state.scene_state = default_state
-    else:
-        # Ensure all required keys exist (for backward compatibility)
-        for key, value in default_state.items():
-            if key not in st.session_state.scene_state:
-                st.session_state.scene_state[key] = value
+    try:
+        if 'scene_state' not in st.session_state:
+            st.session_state.scene_state = default_state
+        else:
+            # Ensure all required keys exist (for backward compatibility)
+            for key, value in default_state.items():
+                if key not in st.session_state.scene_state:
+                    st.session_state.scene_state[key] = value
+    except RuntimeError as e:
+        # This catches the ScriptRunContext warning
+        add_debug_message(f"Note: {str(e)}")
+        # The session state will be properly initialized when the app fully loads
 
 def process_dialogue(dialogue_line, current_image, current_offset):
     """Process a dialogue line and add it to the current image."""
@@ -422,19 +428,47 @@ def play_audio(audio_content):
 def parse_llm_response(raw_response):
     """Extract and parse the JSON from the LLM response."""
     try:
-        # Find the start and end of the JSON object
-        start_index = raw_response.index('{')
-        end_index = raw_response.rindex('}') + 1
+        # First, try to find JSON between triple backticks
+        json_pattern = r'```(?:json)?\s*({[\s\S]*?})\s*```'
+        json_match = re.search(json_pattern, raw_response)
         
+        if json_match:
+            json_string = json_match.group(1)
+            add_debug_message(f"Extracted JSON from code block: {json_string}")
+            return json.loads(json_string)
+        
+        # If that fails, try to find the outermost JSON object
+        start_index = raw_response.find('{')
+        if start_index == -1:
+            add_debug_message("No JSON object found in response")
+            return None
+            
+        # Find matching closing brace
+        brace_count = 0
+        end_index = -1
+        
+        for i in range(start_index, len(raw_response)):
+            if raw_response[i] == '{':
+                brace_count += 1
+            elif raw_response[i] == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    end_index = i + 1
+                    break
+        
+        if end_index == -1:
+            add_debug_message("No matching closing brace found")
+            return None
+            
         # Extract the JSON string
         json_string = raw_response[start_index:end_index]
         
-        add_debug_message(f"Extracted JSON String: {json_string}")  # Debugging line
+        add_debug_message(f"Extracted JSON String: {json_string}")
         
         # Parse the JSON string into a Python dictionary
         return json.loads(json_string)
     
-    except ValueError as e:
+    except Exception as e:
         add_debug_message(f"Error parsing JSON: {e}")
         return None  # Return None if parsing fails
 
@@ -553,17 +587,6 @@ def main():
         st.session_state.scene_state['processing'] = False
     
     with left_col:
-        # Button to load sample JLPT5 word list
-        if st.button("Load Sample JLPT5 Word List"):
-            try:
-                with open('seed_data/JLPT5_words.txt', 'r', encoding='utf-8') as file:
-                    words = file.read().strip()
-                    st.session_state.study_word_focus = words  # Store in session state
-                    st.success("JLPT5 word list loaded successfully!")
-                    st.rerun()  # Force a rerun to update the UI
-            except Exception as e:
-                st.error(f"Error loading word list: {str(e)}")
-
         # Study word focus - display the word list from the LLM response
         study_word_focus = st.text_area(
             "Study word focus:",
@@ -571,6 +594,156 @@ def main():
             value=st.session_state.get('study_word_focus', ""),
             placeholder="Enter words or phrases to focus on..."
         )
+        
+        # Create two columns for the buttons
+        button_col1, button_col2 = st.columns(2)
+        
+        # Button to load sample JLPT5 word list in the first column
+        with button_col1:
+            if st.button("Load Sample JLPT5 Word List"):
+                try:
+                    with open('seed_data/JLPT5_words.txt', 'r', encoding='utf-8') as file:
+                        words = file.read().strip()
+                        st.session_state.study_word_focus = words  # Store in session state
+                        st.success("JLPT5 word list loaded successfully!")
+                        st.rerun()  # Force a rerun to update the UI
+                except Exception as e:
+                    st.error(f"Error loading word list: {str(e)}")
+        
+        # Combined button to call Gemini for a new scenario in the second column
+        with button_col2:
+            if st.button("Call Gemini for a New Scenario"):
+                try:
+                    # Clear chat history
+                    st.session_state.chat_history = []
+                    st.session_state.scene_state['current_dialogue_index'] = 0
+                    
+                    # Don't reset study_word_focus if it contains user-entered words
+                    # Get the current study words from the text area
+                    current_study_words = study_word_focus.strip()
+                    
+                    # Reset other relevant session state variables
+                    st.session_state.scene_state['dialogue_lines'] = []
+                    st.session_state.scene_state['current_position'] = 'panel_0'
+                    st.session_state.scene_state['current_stage'] = 'background'
+                    st.session_state.scene_state['processing'] = False
+                    
+                    # Read the LLM prompt template from file
+                    with open('seed_data/LLM_prompt.md', 'r', encoding='utf-8') as file:
+                        prompt_template = file.read().strip()
+                    
+                    # If the user has entered study words, include them in the prompt
+                    if current_study_words:
+                        add_debug_message(f"Using user-provided word list: {current_study_words}")
+                        # Create a modified prompt that includes the user's word list
+                        prompt_with_words = f"The user has provided the following study words:\n\n{current_study_words}\n\n{prompt_template}"
+                        response = call_gemini_api(prompt_with_words)
+                    else:
+                        # If no words provided, let Gemini generate them as usual
+                        add_debug_message("No user-provided word list, Gemini will generate one")
+                        response = call_gemini_api(prompt_template)
+                    
+                    st.session_state.chat_history.append({"role": "assistant", "content": response})
+                    
+                    # Store the response in llm_response and set the flag to process it
+                    st.session_state.llm_response = response
+                    st.session_state.process_llm_response = True
+                    
+                    # Process the response immediately to ensure widgets are populated on first click
+                    # This helps bypass the need for a second click
+                    raw_response = response
+                    llm_response = parse_llm_response(raw_response)
+                    
+                    if llm_response is not None and llm_response.get("panel-number") == 0:
+                        # Extract values from the setup response
+                        word_list = llm_response["setup"]["word-list"]
+                        image_seed = llm_response["setup"]["image-seed"]
+                        scenario_description_english = llm_response["setup"]["scenario-description-english"]
+                        background_image_prompt_english = llm_response["setup"]["background-image-prompt-english"]
+                        introduction_english = llm_response["setup"]["introduction-english"]
+                        
+                        # Update session state with the extracted values
+                        st.session_state.word_list = word_list
+                        st.session_state.image_seed = image_seed
+                        st.session_state.scenario_description_english = scenario_description_english
+                        st.session_state.background_image_prompt_english = background_image_prompt_english
+                        st.session_state.introduction_english = introduction_english
+                        
+                        # Convert word list to a newline-separated string for display in the text area
+                        st.session_state.study_word_focus = "\n".join(word_list)
+                        
+                        # Update both seed and seed_value in session state
+                        st.session_state.seed = image_seed
+                        st.session_state.seed_value = image_seed
+                        
+                        # Immediately make a second API call to generate Panel 1
+                        add_debug_message("Automatically generating Panel 1...")
+                        
+                        # Create a prompt for Panel 1
+                        panel1_prompt = f"""You are acting as a conversational partner in a Japanese language learning app. Your task is to generate Panel 1 for the conversation scenario you just created.
+                        
+                        **Output only JSON in your response, exactly as specified in the format below. Do not include any additional content outside the JSON format.**
+                        
+                        Here's the scenario information from Panel 0:
+                        - Scenario: {scenario_description_english}
+                        - Introduction: {introduction_english}
+                        - Background: {background_image_prompt_english}
+                        - Word list: {', '.join(word_list)}
+                        
+                        Generate Panel 1 with a character image prompt and the first dialogue line in Japanese.
+                        Use at least one study word naturally in this first dialogue line.
+                        
+                        Format your response as this JSON object:
+                        ```json
+                        {{
+                            "panel-number": 1,
+                            "exchanges": [
+                                {{
+                                    "character-image-prompt-english": "[Detailed character description including appearance and emotion]",
+                                    "dialogue-line-japanese": "[First dialogue line in Japanese using at least one study word]"
+                                }}
+                            ]
+                        }}
+                        ```
+                        """
+                        
+                        # Call the API to generate Panel 1
+                        panel1_response = call_gemini_api(panel1_prompt)
+                        add_debug_message(f"Raw Panel 1 response: {panel1_response}")
+                        
+                        # Parse the Panel 1 response
+                        panel1_data = parse_llm_response(panel1_response)
+                        add_debug_message(f"Parsed Panel 1 data: {panel1_data}")
+                        
+                        if panel1_data is not None and panel1_data.get("panel-number") == 1:
+                            # Store Panel 1 data in session state
+                            add_debug_message(f"Successfully generated Panel 1: {panel1_data}")
+                            
+                            # Extract the character image prompt and dialogue line
+                            if "exchanges" in panel1_data and len(panel1_data["exchanges"]) > 0:
+                                first_exchange = panel1_data["exchanges"][0]
+                                character_image_prompt = first_exchange.get("character-image-prompt-english", "")
+                                dialogue_line = first_exchange.get("dialogue-line-japanese", "")
+                                
+                                # Store in session state
+                                st.session_state.character_image_prompt_english = character_image_prompt
+                                st.session_state.dialogue_japanese = dialogue_line
+                                
+                                # Update the scene state
+                                st.session_state.scene_state["current_position"] = "panel_1"
+                                st.session_state.scene_state["dialogue_lines"] = panel1_data["exchanges"]
+                                st.session_state.scene_state["current_dialogue_index"] = 0
+                        else:
+                            add_debug_message("Failed to generate Panel 1 or response was invalid")
+                
+                    st.success("New scenario generated successfully!")
+                    # Force a rerun to ensure all widgets update with the new values
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error generating scenario: {str(e)}")
+        
+        # Add a divider after the buttons
+        st.divider()
         
         # Display scenario description in a new widget
         scenario_description = st.text_area(
@@ -596,132 +769,45 @@ def main():
             placeholder='e.g., "outside a theatre in a Japanese city"'
         )
         
-        # Combined button to call Gemini for a new scenario
-        if st.button("Call Gemini for a New Scenario"):
-            try:
-                # Clear chat history
-                st.session_state.chat_history = []
-                st.session_state.scene_state['current_dialogue_index'] = 0
-                
-                # Don't reset study_word_focus if it contains user-entered words
-                # Get the current study words from the text area
-                current_study_words = study_word_focus.strip()
-                
-                # Reset other relevant session state variables
-                st.session_state.scene_state['dialogue_lines'] = []
-                st.session_state.scene_state['current_position'] = 'panel_0'
-                st.session_state.scene_state['current_stage'] = 'background'
-                st.session_state.scene_state['processing'] = False
-                
-                # Read the LLM prompt template from file
-                with open('seed_data/LLM_prompt.md', 'r', encoding='utf-8') as file:
-                    prompt_template = file.read().strip()
-                
-                # If the user has entered study words, include them in the prompt
-                if current_study_words:
-                    add_debug_message(f"Using user-provided word list: {current_study_words}")
-                    # Create a modified prompt that includes the user's word list
-                    prompt_with_words = f"The user has provided the following study words:\n\n{current_study_words}\n\n{prompt_template}"
-                    response = call_gemini_api(prompt_with_words)
-                else:
-                    # If no words provided, let Gemini generate them as usual
-                    add_debug_message("No user-provided word list, Gemini will generate one")
-                    response = call_gemini_api(prompt_template)
-                
-                st.session_state.chat_history.append({"role": "assistant", "content": response})
-                
-                # Store the response in llm_response and set the flag to process it
-                st.session_state.llm_response = response
-                st.session_state.process_llm_response = True
-                
-                # Process the response immediately to ensure widgets are populated on first click
-                # This helps bypass the need for a second click
-                raw_response = response
-                llm_response = parse_llm_response(raw_response)
-                
-                if llm_response is not None and llm_response.get("panel-number") == 0:
-                    # Extract values from the setup response
-                    word_list = llm_response["setup"]["word-list"]
-                    image_seed = llm_response["setup"]["image-seed"]
-                    scenario_description_english = llm_response["setup"]["scenario-description-english"]
-                    background_image_prompt_english = llm_response["setup"]["background-image-prompt-english"]
-                    introduction_english = llm_response["setup"]["introduction-english"]
-                    
-                    # Update session state with the extracted values
-                    st.session_state.word_list = word_list
-                    st.session_state.image_seed = image_seed
-                    st.session_state.scenario_description_english = scenario_description_english
-                    st.session_state.background_image_prompt_english = background_image_prompt_english
-                    st.session_state.introduction_english = introduction_english
-                    
-                    # Convert word list to a newline-separated string for display in the text area
-                    st.session_state.study_word_focus = "\n".join(word_list)
-                    
-                    # Update both seed and seed_value in session state
-                    st.session_state.seed = image_seed
-                    st.session_state.seed_value = image_seed
-                
-                st.success("New scenario generated successfully!")
-                # Force a rerun to ensure all widgets update with the new values
-                st.rerun()
-            except Exception as e:
-                st.error(f"Error generating scenario: {str(e)}")
+        # This button has been moved up, right after the 'Load Sample JLPT5 Word List' button
 
-        seed_label_col, seed_input_col = st.columns([1, 3])
-        with seed_label_col:
-            st.write("Image seed:", unsafe_allow_html=True)
+        # Display the image seed as a simple text field (non-editable)
+        st.write(f"Image seed: {st.session_state.get('seed_value', 0)}")
         
-        with seed_input_col:
-            # Check if we need to randomize the seed
-            if 'randomize_seed' in st.session_state and st.session_state.randomize_seed:
-                # Generate a new random seed
-                seed_value = random.randint(0, 10000)
-                # Reset the flag
-                st.session_state.randomize_seed = False
-                # Update the session state
-                st.session_state.seed = seed_value
-                st.session_state.seed_value = seed_value
-            else:
-                # Use existing seed value from session state
-                # IMPORTANT: Ensure we're getting the most up-to-date seed value
-                seed_value = st.session_state.get('seed', 0)
-                add_debug_message(f"Using seed value from session state: {seed_value}")
-            
-            # Use a number input with the seed value (no label)
-            # IMPORTANT: Use a unique key for this widget to avoid conflicts
-            seed_input = st.number_input(
-                "Seed", 
-                min_value=0, 
-                max_value=10000, 
-                value=seed_value,  # Use the value from session state
-                format="%d", 
-                key=f"seed_input_{time.time()}",  # Use a unique key based on time
-                label_visibility="collapsed"
-            )
-            
-            # Update the session state with the widget value
-            st.session_state.seed = seed_input
-        
-        # Randomize button directly underneath the seed input
-        if st.button("🎲 Randomize"):
-            # Set a flag to randomize on next rerun
-            st.session_state.randomize_seed = True
-            # Force a rerun to update the UI immediately
-            st.rerun()
+        # Add a divider before the character description
+        st.divider()
 
         # Character description with predefined prompt
         character_description = st.text_area(
-            "Enter character description:",
+            "Character description:",
             height=100,
+            value=st.session_state.get('character_image_prompt_english', ""),
             placeholder='e.g., "a Japanese woman smiling widely, short hair, square glasses, wearing dungarees"'
         )
         
         # This section was moved above, after the introduction field
 
-        # Dialogue input with predefined prompt
+        # Dialogue input with predefined prompt - accumulate conversation history
+        # Get the existing dialogue history or initialize with the first line if it exists
+        dialogue_history = ""
+        
+        # Initialize with the first AI response if available
+        if st.session_state.get('dialogue_japanese', ""):
+            dialogue_history = st.session_state.get('dialogue_japanese', "")
+        
+        # Add user responses and AI responses from chat history
+        for message in st.session_state.get('chat_history', []):
+            if message["role"] == "user" and message["content"].strip():
+                # Add user message with a prefix
+                dialogue_history += "\n\n[You]: " + message["content"]
+            elif message["role"] == "assistant" and message.get("dialogue_line", ""):
+                # Add AI dialogue line with a prefix
+                dialogue_history += "\n\n[AI]: " + message.get("dialogue_line", "")
+        
         dialogue = st.text_area(
-            "Enter dialogue:",
-            height=80,
+            "Dialogue:",
+            height=200,  # Increased height to show more conversation
+            value=dialogue_history,
             placeholder='e.g., "What a beautiful day!"'
         )
         
@@ -792,11 +878,50 @@ def main():
                 # Add user message to chat history
                 st.session_state.chat_history.append({"role": "user", "content": user_input})
                 
-                # Call Gemini for a response
-                response = call_gemini_api(user_input)
+                # Create a prompt for the next dialogue line
+                current_panel = st.session_state.scene_state.get('current_position', 'panel_1')
+                current_dialogue_index = st.session_state.scene_state.get('current_dialogue_index', 0)
                 
-                # Add AI response to chat history
-                st.session_state.chat_history.append({"role": "assistant", "content": response})
+                # Get context from the current scenario
+                scenario = st.session_state.get('scenario_description_english', "")
+                word_list = st.session_state.get('word_list', [])
+                
+                # Create a prompt that instructs Gemini to continue the conversation
+                dialogue_prompt = f"""You are acting as a conversational partner in a Japanese language learning app. 
+                The user has responded to your previous dialogue line in our scenario: {scenario}.
+                
+                User's message: {user_input}
+                
+                Please respond with the next dialogue line in Japanese. Use natural conversational Japanese 
+                and try to incorporate one of these study words if possible: {', '.join(word_list[:5])}.
+                
+                Format your response as a JSON object with a dialogue-line-japanese field:
+                ```json
+                {{
+                    "panel-number": {current_panel.replace('panel_', '')},
+                    "dialogue-line-japanese": "[Your Japanese response here]"
+                }}
+                ```
+                """
+                
+                # Call Gemini for a response
+                response = call_gemini_api(dialogue_prompt)
+                
+                # Parse the JSON response to extract the dialogue line
+                dialogue_data = parse_llm_response(response)
+                dialogue_line = ""
+                
+                if dialogue_data and "dialogue-line-japanese" in dialogue_data:
+                    dialogue_line = dialogue_data["dialogue-line-japanese"]
+                    # Store the dialogue line in session state
+                    st.session_state.dialogue_japanese = dialogue_line
+                
+                # Add AI response to chat history with both the full response and the extracted dialogue line
+                st.session_state.chat_history.append({
+                    "role": "assistant", 
+                    "content": response,
+                    "dialogue_line": dialogue_line
+                })
                 
                 # Check if the response contains JSON that should be processed
                 if '{' in response and '}' in response:
