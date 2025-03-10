@@ -15,7 +15,7 @@ import google.generativeai as genai
 import json
 
 # Feature flags for development
-ENABLE_IMAGE_GENERATION = False # Set to False to skip image generation (background and character)
+ENABLE_IMAGE_GENERATION = True # Set to False to skip image generation (background and character)
 ENABLE_AUDIO_GENERATION = False # Set to False to skip audio generation for dialogue
 
 DEBUG_MODE = True  # Set to True to enable debug output
@@ -251,7 +251,8 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
         font_path = "fonts/NotoSansJP-Bold.ttf"
     
     try:
-        font = ImageFont.truetype(font_path, 15)
+        # Further reduced font size (was 13)
+        font = ImageFont.truetype(font_path, 11)
     except (IOError, OSError) as e:
         # Print detailed error for debugging
         print(f"Font error: {e}")
@@ -259,7 +260,7 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
         # Try to find any available font that can handle Japanese
         try:
             # Try to use a system font that might support Japanese
-            system_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 15)
+            system_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
             font = system_font
         except:
             font = ImageFont.load_default()  # Last resort fallback
@@ -274,8 +275,8 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
     text_width = max([draw.textbbox((0, 0), line, font=font)[2] for line in lines])
     text_height = sum(line_heights)
     
-    # Calculate bubble size with padding
-    padding = 20  # Slightly increased padding for larger font
+    # Calculate bubble size with further reduced padding (was 12)
+    padding = 8  # Further reduced padding for more compact bubbles
     bubble_width = text_width + padding * 2
     bubble_height = text_height + padding * 2
     
@@ -284,21 +285,21 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
     
     # Set bubble position based on whether it's AI or user dialogue
     if is_ai:
-        # AI dialogue: left aligned near the left edge
-        base_x = bubble_width // 2 + 40  # Left aligned with margin
+        # AI dialogue: left aligned very near the left border
+        base_x = bubble_width // 2 + 20  # Very close to left edge
     else:
-        # User dialogue: right aligned near the right edge
-        base_x = img_width - bubble_width // 2 - 40  # Right aligned with margin
+        # User dialogue: right edge aligned with center line of panel
+        base_x = (img_width // 2) - (bubble_width // 2)  # Right edge at center line
     
     base_y = 40  # Start closer to the top
     
     # Apply only a small horizontal variation to keep bubbles more aligned
     if is_ai:
         # Less horizontal variation for AI bubbles to keep them aligned left
-        horizontal_shift = ((offset_y // 60) % 2) * (img_width // 20)
+        horizontal_shift = ((offset_y // 60) % 2) * (img_width // 30)
     else:
-        # More horizontal variation for user bubbles
-        horizontal_shift = -((offset_y // 60) % 2) * (img_width // 20)
+        # Less horizontal variation for user bubbles too
+        horizontal_shift = ((offset_y // 60) % 2) * (img_width // 30)
     
     # Adjust position based on offset with smaller vertical increments
     position = (base_x + horizontal_shift, base_y + offset_y)
@@ -315,18 +316,18 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
     
     # Set bubble and text colors based on whether it's AI or user dialogue
     if is_ai:
-        # AI dialogue: dark green (jade)
-        bubble_color = (0, 100, 80, 230)  # Dark green (jade) with transparency
-        text_color = (255, 255, 255)  # White text for contrast
-        outline_color = (0, 80, 60)  # Darker green for outline
+        # AI dialogue: white fill with jade text/outline
+        bubble_color = (255, 255, 255, 230)  # White with transparency
+        text_color = (0, 100, 80)  # Jade text
+        outline_color = (0, 80, 60)  # Darker jade for outline
     else:
-        # User dialogue: dark orange
-        bubble_color = (180, 80, 0, 230)  # Dark orange with transparency
-        text_color = (255, 255, 255)  # White text for contrast
+        # User dialogue: white fill with dark orange text/outline
+        bubble_color = (255, 255, 255, 230)  # White with transparency
+        text_color = (180, 80, 0)  # Dark orange text
         outline_color = (150, 60, 0)  # Darker orange for outline
         
     # Draw bubble with rounded corners
-    corner_radius = 20
+    corner_radius = 12  # Further reduced corner radius (was 15)
     draw.rounded_rectangle([left, top, right, bottom], 
                            fill=bubble_color, 
                            outline=outline_color, 
@@ -337,7 +338,10 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
     y_text = top + padding
     for line in lines:
         line_width = draw.textbbox((0, 0), line, font=font)[2]
-        x_text = left + (bubble_width - line_width) // 2
+        
+        # Text alignment: center for both AI and user bubbles
+        x_text = left + (bubble_width - line_width) // 2  # Center-aligned within the bubble
+            
         draw.text((x_text, y_text), line, font=font, fill=text_color)
         y_text += line_heights[0]  # Assuming all lines have same height
     
@@ -635,9 +639,15 @@ def main():
                         st.session_state.scene_state['processing'] = True
                         process_panel(panel_number, llm_response, character_description=character_image_prompt, seed=st.session_state.seed)
                 
-                # Display the scenario description and introduction
-                st.success(f"Scenario: {scenario_description_english}")
-                st.info(f"Introduction: {introduction_english}")
+                # Display the scenario description and introduction if they exist
+                # Get values from session state if they're not defined in this code path
+                scenario = st.session_state.get('scenario_description_english', '')
+                intro = st.session_state.get('introduction_english', '')
+                
+                if scenario:
+                    st.success(f"Scenario: {scenario}")
+                if intro:
+                    st.info(f"Introduction: {intro}")
                 
                 # Clear the LLM response to prevent reprocessing
                 st.session_state.llm_response = None
@@ -715,7 +725,6 @@ def main():
                         st.rerun()  # Force a rerun to update the UI
                 except Exception as e:
                     st.error(f"Error loading word list: {str(e)}")
-        
         # Combined button to call Gemini for a new scenario in the second column
         with button_col2:
             if st.button("Call Gemini for a New Scenario"):
