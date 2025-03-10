@@ -107,6 +107,14 @@ Output after completing 3–5 exchanges and starting a new panel:
 }
 ```
 
+**important**
+- describe the character only, specifying age, gender, and appearance
+- characters will almost always be Japanese as this is an immersion Japanese learning activity based on living in Japan 
+- *never* describe the environment or the character's position within the scene
+- *never* include colours or patterns e.g. don't say "a red blouse", a "floral dress", "short brown hair" or anything similar in the character description, instead simply use "a blouse", "a dress", "short hair" 
+- you should specify plain if this item is normally patterned or has a logo e.g. do say "a plain baseball cap" or "a plain yukata" as examples
+- *never* include style information e.g. watercolour or realistic in the character description as this will be added by the app later
+
 The conversation ends after 4–6 panels or if the user says "終了" (end).
 
 Output:

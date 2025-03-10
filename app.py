@@ -15,7 +15,7 @@ import google.generativeai as genai
 import json
 
 # Feature flags for development
-ENABLE_IMAGE_GENERATION = False  # Set to False to skip image generation (background and character)
+ENABLE_IMAGE_GENERATION = True  # Set to False to skip image generation (background and character)
 ENABLE_AUDIO_GENERATION = False # Set to False to skip audio generation for dialogue
 
 DEBUG_MODE = True  # Set to True to enable debug output
@@ -725,13 +725,29 @@ def main():
                                 character_image_prompt = first_exchange.get("character-image-prompt-english", "")
                                 dialogue_line = first_exchange.get("dialogue-line-japanese", "")
                                 
+                                # Add [AI]: prefix to the dialogue line
+                                dialogue_line_with_prefix = f"[AI]: {dialogue_line}"
+                                
                                 # Store in session state
                                 st.session_state.character_image_prompt_english = character_image_prompt
-                                st.session_state.dialogue_japanese = dialogue_line
+                                st.session_state.dialogue_japanese = dialogue_line_with_prefix
                                 
                                 # Update the scene state
                                 st.session_state.scene_state["current_position"] = "panel_1"
-                                st.session_state.scene_state["dialogue_lines"] = panel1_data["exchanges"]
+                                
+                                # Add [AI]: prefix to each dialogue line in the exchanges
+                                modified_exchanges = []
+                                for exchange in panel1_data["exchanges"]:
+                                    if "dialogue-line-japanese" in exchange:
+                                        # Create a copy of the exchange with the modified dialogue line
+                                        modified_exchange = exchange.copy()
+                                        dialogue = exchange["dialogue-line-japanese"]
+                                        modified_exchange["dialogue-line-japanese"] = f"[AI]: {dialogue}"
+                                        modified_exchanges.append(modified_exchange)
+                                    else:
+                                        modified_exchanges.append(exchange)
+                                
+                                st.session_state.scene_state["dialogue_lines"] = modified_exchanges
                                 st.session_state.scene_state["current_dialogue_index"] = 0
                         else:
                             add_debug_message("Failed to generate Panel 1 or response was invalid")
@@ -1056,8 +1072,19 @@ def process_current_stage(character_description, background_description, seed):
     current_stage = st.session_state.scene_state['current_stage']
     
     if current_stage == 'background':
+        # Read the background style prompt suffix from file
+        try:
+            with open('seed_data/background_style_prompt_suffix.txt', 'r', encoding='utf-8') as file:
+                background_style_suffix = file.read().strip()
+            # Append the background style suffix to the background description
+            enhanced_background_description = f"{background_description}. {background_style_suffix}"
+            add_debug_message(f"Enhanced background prompt: {enhanced_background_description}")
+        except Exception as e:
+            add_debug_message(f"Error reading background style suffix: {str(e)}")
+            enhanced_background_description = background_description
+            
         # Generate background image only for the first panel in a scene
-        background_image = generate_image(background_description, steps=4, seed=seed)
+        background_image = generate_image(enhanced_background_description, steps=4, seed=seed)
         if background_image:
             # Apply Gaussian blur for combined view
             blurred_background = apply_gaussian_blur(background_image)
@@ -1083,8 +1110,19 @@ def process_current_stage(character_description, background_description, seed):
             return False
     
     elif current_stage == 'character':
+        # Read the character style prompt suffix from file
+        try:
+            with open('seed_data/character_style_prompt_suffix.txt', 'r', encoding='utf-8') as file:
+                character_style_suffix = file.read().strip()
+            # Append the character style suffix to the character description
+            enhanced_character_description = f"{character_description}. {character_style_suffix}"
+            add_debug_message(f"Enhanced character prompt: {enhanced_character_description}")
+        except Exception as e:
+            add_debug_message(f"Error reading character style suffix: {str(e)}")
+            enhanced_character_description = character_description
+            
         # Generate character image
-        character_image = generate_image(character_description, steps=4, seed=seed)
+        character_image = generate_image(enhanced_character_description, steps=4, seed=seed)
         if character_image:
             # Get the background image
             background_image = st.session_state.scene_state['background_image']
@@ -1106,8 +1144,16 @@ def process_current_stage(character_description, background_description, seed):
             return False
 
 # Update the call_gemini_api function to accept a prompt parameter
-def call_gemini_api(prompt):
-    """Call the Gemini API with the given prompt."""
+def call_gemini_api(prompt, max_retries=3):
+    """Call the Gemini API with the given prompt.
+    
+    Args:
+        prompt: The prompt to send to the Gemini API.
+        max_retries: Maximum number of retry attempts if valid JSON is not returned.
+        
+    Returns:
+        The response text from the Gemini API.
+    """
     try:
         # Load environment variables
         load_dotenv()
@@ -1122,10 +1168,29 @@ def call_gemini_api(prompt):
         # Create a model instance
         model = genai.GenerativeModel('gemini-2.0-flash')
         
-        # Generate a response based on the prompt
-        response = model.generate_content(prompt)  # Removed output_format parameter
+        # Try multiple times to get a valid JSON response
+        for attempt in range(max_retries):
+            # Generate a response based on the prompt
+            response = model.generate_content(prompt)
+            response_text = response.text
+            
+            # Check if the response contains valid JSON
+            parsed_json = parse_llm_response(response_text)
+            
+            if parsed_json is not None:
+                add_debug_message(f"Got valid JSON response on attempt {attempt + 1}")
+                return response_text
+            else:
+                add_debug_message(f"Attempt {attempt + 1}/{max_retries} failed to produce valid JSON. Retrying...")
+                
+                # Add a stronger hint for the retry
+                if attempt < max_retries - 1:  # Only add hint if we're going to retry
+                    prompt = f"{prompt}\n\nIMPORTANT: Your previous response did not contain valid JSON. Please respond ONLY with a JSON object in the specified format. Do not include any explanatory text outside the JSON."
         
-        return response.text  # Assuming response.text contains the desired output
+        # If we've exhausted all retries, return the last response
+        add_debug_message("All retry attempts failed to produce valid JSON. Returning last response.")
+        return response_text
+        
     except Exception as e:
         print(f"Error calling Gemini API: {str(e)}")
         return f"Error generating response: {str(e)}"
