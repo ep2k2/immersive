@@ -349,6 +349,8 @@ def init_scene_state():
         'panels': {},  # Empty dictionary to store panels
         'panel_count': 0,
         'current_position': 'panel_0',  # Simplified position naming
+        'current_panel_number': 0,  # Track the current panel number (0 for setup, 1+ for content)
+        'panel_data': {},  # Store panel-specific data (character images, dialogue, etc.)
         'current_stage': 'background',
         'scene_background': None,
         'background_image': None,
@@ -576,34 +578,62 @@ def main():
             add_debug_message("LLM Response parsed")
             add_debug_message(f"Parsed LLM Response: {llm_response}")
             
-            if llm_response is not None and llm_response.get("panel-number") == 0:
-                # Extract values from the setup response
-                word_list = llm_response["setup"]["word-list"]
-                image_seed = llm_response["setup"]["image-seed"]
-                scenario_description_english = llm_response["setup"]["scenario-description-english"]
-                background_image_prompt_english = llm_response["setup"]["background-image-prompt-english"]
-                introduction_english = llm_response["setup"]["introduction-english"]
+            if llm_response is not None:
+                panel_number = llm_response.get("panel-number")
+                # Set a default value if panel_number is None
+                if panel_number is None:
+                    panel_number = -1
                 
-                # Print extracted values for debugging
-                add_debug_message(f"Word List: {word_list}")
-                add_debug_message(f"Image Seed: {image_seed}")
-                add_debug_message(f"Scenario Description (English): {scenario_description_english}")
-                add_debug_message(f"Background Image Prompt (English): {background_image_prompt_english}")
-                add_debug_message(f"Introduction (English): {introduction_english}")
+                # Process Panel 0 (setup)
+                if panel_number == 0:
+                    # Extract values from the setup response
+                    word_list = llm_response["setup"]["word-list"]
+                    image_seed = llm_response["setup"]["image-seed"]
+                    scenario_description_english = llm_response["setup"]["scenario-description-english"]
+                    background_image_prompt_english = llm_response["setup"]["background-image-prompt-english"]
+                    introduction_english = llm_response["setup"]["introduction-english"]
+                    
+                    # Print extracted values for debugging
+                    add_debug_message(f"Word List: {word_list}")
+                    add_debug_message(f"Image Seed: {image_seed}")
+                    add_debug_message(f"Scenario Description (English): {scenario_description_english}")
+                    add_debug_message(f"Background Image Prompt (English): {background_image_prompt_english}")
+                    add_debug_message(f"Introduction (English): {introduction_english}")
+                    
+                    # Update session state with the extracted values
+                    st.session_state.word_list = word_list
+                    st.session_state.image_seed = image_seed
+                    st.session_state.scenario_description_english = scenario_description_english
+                    st.session_state.background_image_prompt_english = background_image_prompt_english
+                    st.session_state.introduction_english = introduction_english
+                    
+                    # Convert word list to a newline-separated string for display in the text area
+                    st.session_state.study_word_focus = "\n".join(word_list)
+                    
+                    # IMPORTANT: Update both seed and seed_value in session state
+                    st.session_state.seed = image_seed
+                    st.session_state.seed_value = image_seed
+                    
+                    # Process panel 0 (background generation and introduction)
+                    st.session_state.scene_state['processing'] = True
+                    process_panel(0, llm_response, background_description=background_image_prompt_english, seed=image_seed)
+                    
+                    # Automatically generate Panel 1 after Panel 0 is processed
+                    st.session_state.generate_panel_1 = True
                 
-                # Update session state with the extracted values
-                st.session_state.word_list = word_list
-                st.session_state.image_seed = image_seed
-                st.session_state.scenario_description_english = scenario_description_english
-                st.session_state.background_image_prompt_english = background_image_prompt_english
-                st.session_state.introduction_english = introduction_english
-                
-                # Convert word list to a newline-separated string for display in the text area
-                st.session_state.study_word_focus = "\n".join(word_list)
-                
-                # IMPORTANT: Update both seed and seed_value in session state
-                st.session_state.seed = image_seed
-                st.session_state.seed_value = image_seed  # Add this line to ensure the value is stored
+                # Process Panel 1+ (character and dialogue)
+                elif panel_number >= 1:
+                    # Extract the character image prompt and dialogue data
+                    if "exchanges" in llm_response and len(llm_response["exchanges"]) > 0:
+                        first_exchange = llm_response["exchanges"][0]
+                        character_image_prompt = first_exchange.get("character-image-prompt-english", "")
+                        
+                        # Update the current position to match the panel number
+                        st.session_state.scene_state["current_position"] = f"panel_{panel_number}"
+                        
+                        # Process the panel (character generation and dialogue)
+                        st.session_state.scene_state['processing'] = True
+                        process_panel(panel_number, llm_response, character_description=character_image_prompt, seed=st.session_state.seed)
                 
                 # Display the scenario description and introduction
                 st.success(f"Scenario: {scenario_description_english}")
@@ -756,32 +786,39 @@ def main():
                         add_debug_message("Automatically generating Panel 1...")
                         
                         # Create a prompt for Panel 1
-                        panel1_prompt = f"""You are acting as a conversational partner in a Japanese language learning app. Your task is to generate Panel 1 for the conversation scenario you just created.
-                        
-                        **Output only JSON in your response, exactly as specified in the format below. Do not include any additional content outside the JSON format.**
-                        
-                        Here's the scenario information from Panel 0:
-                        - Scenario: {scenario_description_english}
-                        - Introduction: {introduction_english}
-                        - Background: {background_image_prompt_english}
-                        - Word list: {', '.join(word_list)}
-                        
-                        Generate Panel 1 with a character image prompt and the first dialogue line in Japanese.
-                        Use at least one study word naturally in this first dialogue line.
-                        
-                        Format your response as this JSON object:
-                        ```json
-                        {{
-                            "panel-number": 1,
-                            "exchanges": [
-                                {{
-                                    "character-image-prompt-english": "[Detailed character description including appearance and emotion]",
-                                    "dialogue-line-japanese": "[First dialogue line in Japanese using at least one study word]"
-                                }}
-                            ]
-                        }}
-                        ```
-                        """
+                        panel1_prompt = f"""NEW SESSION: Ignore all previous context. You are acting as a conversational partner in a Japanese language learning app. Your task is to generate Panel 1 for the conversation scenario described below.
+
+**Output only JSON in your response, exactly as specified in the format below. Do not include any additional content outside the JSON format.**
+
+Here's the scenario information from Panel 0:
+- Scenario: {scenario_description_english}
+- Introduction: {introduction_english}
+- Background: {background_image_prompt_english}
+- Word list: {', '.join(word_list)}
+
+Generate Panel 1 with a character image prompt and the first dialogue line in Japanese.
+Use at least one study word naturally in this first dialogue line.
+
+Your character image prompt must follow these requirements:
+- Focus ONLY on the character - do NOT include any environmental details or positioning
+- Specify the character's age, gender, and appearance (height, build, glasses, etc.)
+- State that the character is Japanese unless the scenario indicates otherwise
+- Describe clothing in general terms without colors or patterns
+- Briefly describe the character's current action or emotion
+- NEVER include colors (e.g., "brown", "red", "blue"), patterns, or style information
+
+Format your response as this JSON object:
+```json
+{{
+    "panel-number": 1,
+    "exchanges": [
+        {{
+            "character-image-prompt-english": "[Detailed character description including appearance and emotion]",
+            "dialogue-line-japanese": "[First dialogue line in Japanese using at least one study word]"
+        }}
+    ]
+}}
+```"""
                         
                         # Call the API to generate Panel 1
                         panel1_response = call_gemini_api(panel1_prompt)
@@ -799,32 +836,20 @@ def main():
                             if "exchanges" in panel1_data and len(panel1_data["exchanges"]) > 0:
                                 first_exchange = panel1_data["exchanges"][0]
                                 character_image_prompt = first_exchange.get("character-image-prompt-english", "")
-                                dialogue_line = first_exchange.get("dialogue-line-japanese", "")
-                                
-                                # Add [AI]: prefix to the dialogue line
-                                dialogue_line_with_prefix = f"[AI]: {dialogue_line}"
                                 
                                 # Store in session state
                                 st.session_state.character_image_prompt_english = character_image_prompt
-                                st.session_state.dialogue_japanese = dialogue_line_with_prefix
                                 
-                                # Update the scene state
+                                # Extract dialogue line from the first exchange
+                                dialogue_line = first_exchange.get("dialogue-line-japanese", "")
+                                
+                                # Update the scene state to panel 1
                                 st.session_state.scene_state["current_position"] = "panel_1"
+                                st.session_state.scene_state["current_panel_number"] = 1
                                 
-                                # Add [AI]: prefix to each dialogue line in the exchanges
-                                modified_exchanges = []
-                                for exchange in panel1_data["exchanges"]:
-                                    if "dialogue-line-japanese" in exchange:
-                                        # Create a copy of the exchange with the modified dialogue line
-                                        modified_exchange = exchange.copy()
-                                        dialogue = exchange["dialogue-line-japanese"]
-                                        modified_exchange["dialogue-line-japanese"] = f"[AI]: {dialogue}"
-                                        modified_exchanges.append(modified_exchange)
-                                    else:
-                                        modified_exchanges.append(exchange)
-                                
-                                st.session_state.scene_state["dialogue_lines"] = modified_exchanges
-                                st.session_state.scene_state["current_dialogue_index"] = 0
+                                # Process panel 1 using the new panel processing function
+                                st.session_state.scene_state["processing"] = True
+                                process_panel(1, panel1_data, character_description=character_image_prompt, seed=st.session_state.seed)
                         else:
                             add_debug_message("Failed to generate Panel 1 or response was invalid")
                 
@@ -1150,6 +1175,136 @@ def main():
         # If processing was successful and we need to continue to the next stage, rerun the app
         if should_continue:
             st.rerun()
+
+def process_panel(panel_number, panel_data, character_description=None, background_description=None, seed=None):
+    """Process a specific panel based on its number and data.
+    
+    Args:
+        panel_number: The panel number (0 for setup, 1+ for content panels)
+        panel_data: Dictionary containing panel-specific data
+        character_description: Character description for this panel (for panels 1+)
+        background_description: Background description (for panel 0)
+        seed: Random seed for image generation
+        
+    Returns:
+        Boolean indicating if processing was successful
+    """
+    # Store the current panel number in session state
+    st.session_state.scene_state['current_panel_number'] = panel_number
+    
+    # Panel 0 is for setup (background generation and introduction)
+    if panel_number == 0:
+        # Store panel data in the panel_data dictionary
+        st.session_state.scene_state['panel_data'][panel_number] = panel_data
+        
+        # Process background generation
+        background_success = process_background(background_description, seed)
+        
+        # Generate audio for introduction if available
+        if 'introduction-english' in panel_data.get('setup', {}):
+            introduction = panel_data['setup']['introduction-english']
+            # TODO: Generate audio for introduction (future enhancement)
+            
+        return background_success
+    
+    # Panels 1+ are for character and dialogue
+    else:
+        # Store panel data in the panel_data dictionary
+        if panel_number not in st.session_state.scene_state['panel_data']:
+            st.session_state.scene_state['panel_data'][panel_number] = panel_data
+        
+        # Process character generation and overlay on background
+        if character_description:
+            character_success = process_character(character_description, seed)
+            if not character_success:
+                return False
+        
+        # Process dialogue if available
+        # Check if dialogue is directly in panel_data
+        if 'dialogue-line-japanese' in panel_data:
+            dialogue_line = panel_data['dialogue-line-japanese']
+            # Add AI dialogue to the panel with proper styling
+            ai_dialogue = f"[AI]: {dialogue_line}"
+            add_dialogue_to_panel(ai_dialogue, is_ai=True)
+        # Check if dialogue is in the exchanges array
+        elif 'exchanges' in panel_data and len(panel_data['exchanges']) > 0:
+            first_exchange = panel_data['exchanges'][0]
+            if 'dialogue-line-japanese' in first_exchange:
+                dialogue_line = first_exchange['dialogue-line-japanese']
+                # Add AI dialogue to the panel with proper styling
+                ai_dialogue = f"[AI]: {dialogue_line}"
+                add_dialogue_to_panel(ai_dialogue, is_ai=True)
+        
+        return True
+
+def process_background(background_description, seed):
+    """Process background generation for a scene."""
+    # Read the background style prompt suffix from file
+    try:
+        with open('seed_data/background_style_prompt_suffix.txt', 'r', encoding='utf-8') as file:
+            background_style_suffix = file.read().strip()
+        # Append the background style suffix to the background description
+        enhanced_background_description = f"{background_description}. {background_style_suffix}"
+        add_debug_message(f"Enhanced background prompt: {enhanced_background_description}")
+    except Exception as e:
+        add_debug_message(f"Error reading background style suffix: {str(e)}")
+        enhanced_background_description = background_description
+        
+    # Generate background image only for the first panel in a scene
+    background_image = generate_image(enhanced_background_description, steps=4, seed=seed)
+    if background_image:
+        # Apply Gaussian blur for combined view
+        blurred_background = apply_gaussian_blur(background_image)
+        
+        # Store the background image for this scene
+        st.session_state.scene_state['scene_background'] = blurred_background
+        st.session_state.scene_state['background_image'] = blurred_background
+        
+        # Wait for a moment before generating character (reduced if image generation is disabled)
+        if ENABLE_IMAGE_GENERATION:
+            time.sleep(5)  # Reduced wait time
+        else:
+            time.sleep(1)  # Shorter wait time when image generation is disabled
+        
+        return True
+    else:
+        st.error("Failed to generate background image.")
+        st.session_state.scene_state['processing'] = False
+        return False
+
+def process_character(character_description, seed):
+    """Process character generation and overlay on background."""
+    # Read the character style prompt suffix from file
+    try:
+        with open('seed_data/character_style_prompt_suffix.txt', 'r', encoding='utf-8') as file:
+            character_style_suffix = file.read().strip()
+        # Append the character style suffix to the character description
+        enhanced_character_description = f"{character_description}. {character_style_suffix}"
+        add_debug_message(f"Enhanced character prompt: {enhanced_character_description}")
+    except Exception as e:
+        add_debug_message(f"Error reading character style suffix: {str(e)}")
+        enhanced_character_description = character_description
+        
+    # Generate character image
+    character_image = generate_image(enhanced_character_description, steps=4, seed=seed)
+    if character_image:
+        # Get the background image
+        background_image = st.session_state.scene_state['background_image']
+        
+        # Create combined image
+        combined_image = overlay_images(background_image, character_image)
+        st.session_state.scene_state['combined_image'] = combined_image
+        st.session_state.scene_state['character_image'] = character_image
+        
+        # Mark as complete
+        st.session_state.scene_state['current_stage'] = 'complete'
+        st.session_state.scene_state['processing'] = False
+        
+        return True
+    else:
+        st.error("Failed to generate character image.")
+        st.session_state.scene_state['processing'] = False
+        return False
 
 def process_current_stage(character_description, background_description, seed):
     """Process the current stage of scene generation."""
