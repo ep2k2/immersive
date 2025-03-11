@@ -16,7 +16,7 @@ import json
 
 # Feature flags for development
 ENABLE_IMAGE_GENERATION = True # Set to False to skip image generation (background and character)
-ENABLE_AUDIO_GENERATION = True # Set to False to skip audio generation for dialogue
+ENABLE_AUDIO_GENERATION = False # Set to False to skip audio generation for dialogue
 
 DEBUG_MODE = True  # Set to True to enable debug output
 
@@ -477,24 +477,56 @@ def add_dialogue_to_panel(dialogue_line, is_ai=True):
     # Get current offset for this panel
     current_offset = st.session_state.scene_state['dialogue_offsets'][current_pos]
     
-    # Process the dialogue and get audio
-    current_image = st.session_state.scene_state['combined_image']
-    new_image, audio_content = process_dialogue(dialogue_line, current_image, current_offset, is_ai=is_ai)
-    
-    # Update the combined image with the speech bubble
-    st.session_state.scene_state['combined_image'] = new_image
-    
-    # Store the audio content if available (only for AI dialogue)
-    if audio_content and is_ai:
-        dialogue_index = st.session_state.scene_state.get('current_dialogue_index', 0)
-        audio_key = f"{current_pos}_{dialogue_index}"
-        st.session_state.scene_state['dialogue_audio'][audio_key] = audio_content
-        # Update the dialogue index
-        st.session_state.scene_state['current_dialogue_index'] = dialogue_index + 1
-    
-    # Increment the offset for the next dialogue bubble with a smaller increment for slight overlap
-    # Use a smaller increment (40-45 pixels) to create a slight overlap between bubbles
-    st.session_state.scene_state['dialogue_offsets'][current_pos] += 45
+    # For AI responses, split the dialogue by Japanese periods and process each part
+    if is_ai and "。" in dialogue_line:
+        # Generate audio for the full dialogue line first (we only want one audio file)
+        audio_content = generate_speech(dialogue_line) if ENABLE_AUDIO_GENERATION else None
+        
+        # Split the dialogue into parts
+        dialogue_parts = split_dialogue_by_japanese_period(dialogue_line)
+        add_debug_message(f"Split dialogue into {len(dialogue_parts)} parts: {dialogue_parts}")
+        
+        # Process each part separately for display
+        current_image = st.session_state.scene_state['combined_image']
+        for part in dialogue_parts:
+            if part.strip():
+                # Create speech bubble for this part
+                current_image = create_speech_bubble(current_image, part, offset_y=current_offset, is_ai=is_ai)
+                
+                # Increment the offset for the next bubble
+                current_offset += 45
+        
+        # Update the combined image with all speech bubbles
+        st.session_state.scene_state['combined_image'] = current_image
+        
+        # Store the audio content if available
+        if audio_content:
+            dialogue_index = st.session_state.scene_state.get('current_dialogue_index', 0)
+            audio_key = f"{current_pos}_{dialogue_index}"
+            st.session_state.scene_state['dialogue_audio'][audio_key] = audio_content
+            # Update the dialogue index
+            st.session_state.scene_state['current_dialogue_index'] = dialogue_index + 1
+        
+        # Update the final offset for the panel
+        st.session_state.scene_state['dialogue_offsets'][current_pos] = current_offset
+    else:
+        # Process the dialogue as a single unit (original behavior)
+        current_image = st.session_state.scene_state['combined_image']
+        new_image, audio_content = process_dialogue(dialogue_line, current_image, current_offset, is_ai=is_ai)
+        
+        # Update the combined image with the speech bubble
+        st.session_state.scene_state['combined_image'] = new_image
+        
+        # Store the audio content if available (only for AI dialogue)
+        if audio_content and is_ai:
+            dialogue_index = st.session_state.scene_state.get('current_dialogue_index', 0)
+            audio_key = f"{current_pos}_{dialogue_index}"
+            st.session_state.scene_state['dialogue_audio'][audio_key] = audio_content
+            # Update the dialogue index
+            st.session_state.scene_state['current_dialogue_index'] = dialogue_index + 1
+        
+        # Increment the offset for the next dialogue bubble with a smaller increment for slight overlap
+        st.session_state.scene_state['dialogue_offsets'][current_pos] += 45
 
 def generate_speech(text):
     """Generate speech audio from text using Google's Text-to-Speech API."""
@@ -649,6 +681,30 @@ def play_audio_with_autoplay(audio_content):
         </script>
         """
         st.markdown(audio_html, unsafe_allow_html=True)
+
+def split_dialogue_by_japanese_period(text):
+    """Split dialogue text using Japanese full-stop period character "。".
+    
+    Args:
+        text: The dialogue text to split
+        
+    Returns:
+        List of dialogue parts split by Japanese period
+    """
+    # Split the text by Japanese period "。"
+    parts = text.split("。")
+    
+    # Filter out empty parts and add the period back to non-empty parts
+    result = []
+    for part in parts:
+        if part.strip():
+            result.append(part + "。")
+    
+    # If the original text doesn't end with a period, remove it from the last part
+    if not text.endswith("。") and result:
+        result[-1] = result[-1][:-1]
+    
+    return result
 
 def main():
     """Main function to run the Streamlit app."""
@@ -914,6 +970,10 @@ Format your response as this JSON object:
                 try:
                     # Clear chat history
                     st.session_state.chat_history = []
+
+                    # Clear dialogue lines array
+                    if 'dialogue_lines_array' in st.session_state:
+                        st.session_state.dialogue_lines_array = []
                     
                     # Save the current study words before resetting
                     current_study_words = study_word_focus.strip()
