@@ -10,7 +10,7 @@
 
 It is *deinitely not* fully functional as the control flow from LLM is not working at all reliably... but I have learned from the experience!
 
-![example with dialogue 1](screenshots/imm-05.png)
-![example with dialogue 2](screenshots/imm-04.png)
-![consistency in image example](screenshots/imm-02.png)
-![style example](screenshots/imm-01.png)
+![example with dialogue 1](screenshots/imm-05.PNG)
+![example with dialogue 2](screenshots/imm-04.PNG)
+![consistency in image example](screenshots/imm-02.PNG)
+![style example](screenshots/imm-01.PNG)
