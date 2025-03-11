@@ -16,7 +16,7 @@ import json
 
 # Feature flags for development
 ENABLE_IMAGE_GENERATION = True # Set to False to skip image generation (background and character)
-ENABLE_AUDIO_GENERATION = False # Set to False to skip audio generation for dialogue
+ENABLE_AUDIO_GENERATION = True # Set to False to skip audio generation for dialogue
 
 DEBUG_MODE = True  # Set to True to enable debug output
 
