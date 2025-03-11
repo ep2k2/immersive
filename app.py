@@ -415,7 +415,8 @@ def init_scene_state():
         'dialogue_lines': [],
         'current_dialogue_index': 0,
         'dialogue_offsets': {},
-        'dialogue_audio': {}
+        'dialogue_audio': {},
+        'character_gender': None  # Track character gender for voice selection
     }
     
     try:
@@ -509,10 +510,30 @@ def generate_speech(text):
     
     url = "https://texttospeech.googleapis.com/v1beta1/text:synthesize"
     
+    # Get character gender and apply voice variation
+    character_gender = st.session_state.scene_state.get('character_gender')
+    
+    # Debug log the character gender
+    if character_gender:
+        print(f"DEBUG: Using character gender: {character_gender}")
+    else:
+        print("DEBUG: WARNING - Character gender is missing! This should be provided by the LLM.")
+        # Fall back to female if missing, but this should not happen
+        character_gender = 'female'
+    
+    # Select randomly between the two voices for each gender
+    if character_gender == "female":
+        voice_name = random.choice(["ja-JP-Standard-A", "ja-JP-Standard-C"])
+    else:
+        voice_name = random.choice(["ja-JP-Standard-B", "ja-JP-Standard-D"])
+    
+    # Add random pitch variation within ±15%
+    pitch_variation = random.uniform(-0.15, 0.15)
+    
     payload = {
         "audioConfig": {
             "audioEncoding": "LINEAR16",
-            "pitch": 1,
+            "pitch": pitch_variation,
             "speakingRate": 1.00
         },
         "input": {
@@ -520,7 +541,7 @@ def generate_speech(text):
         },
         "voice": {
             "languageCode": "ja-JP",
-            "name": "ja-JP-Standard-D"
+            "name": voice_name
         }
     }
     
@@ -1094,21 +1115,17 @@ Format your response as this JSON object:
         # This section was moved above, after the introduction field
 
         # Dialogue input with predefined prompt - accumulate conversation history
-        # Get the existing dialogue history or initialize with the first line if it exists
-        dialogue_history = ""
+        # Initialize dialogue lines array if not already in session state
+        if 'dialogue_lines_array' not in st.session_state:
+            st.session_state.dialogue_lines_array = []
+            
+            # Initialize with the first AI response if available
+            if st.session_state.get('dialogue_japanese', ""):
+                initial_line = f"[AI]: {st.session_state.get('dialogue_japanese', '')}"
+                st.session_state.dialogue_lines_array.append(initial_line)
         
-        # Initialize with the first AI response if available
-        if st.session_state.get('dialogue_japanese', ""):
-            dialogue_history = st.session_state.get('dialogue_japanese', "")
-        
-        # Add user responses and AI responses from chat history
-        for message in st.session_state.get('chat_history', []):
-            if message["role"] == "user" and message["content"].strip():
-                # Add user message with a prefix
-                dialogue_history += "\n\n[You]: " + message["content"]
-            elif message["role"] == "assistant" and message.get("dialogue_line", ""):
-                # Add AI dialogue line with a prefix
-                dialogue_history += "\n\n[AI]: " + message.get("dialogue_line", "")
+        # Build dialogue history from the array
+        dialogue_history = "\n\n".join(st.session_state.dialogue_lines_array)
         
         dialogue = st.text_area(
             "Dialogue:",
@@ -1117,38 +1134,36 @@ Format your response as this JSON object:
             placeholder='e.g., "What a beautiful day!"'
         )
         
+        # Process user input if dialogue has changed
+        if dialogue != dialogue_history and dialogue.strip():
+            # Extract the new line (assuming it's added at the end)
+            new_lines = [line.strip() for line in dialogue.split('\n\n') if line.strip()]
+            
+            if len(new_lines) > len(st.session_state.dialogue_lines_array):
+                # Get the newest line
+                newest_line = new_lines[-1]
+                
+                # If it doesn't start with [AI] or [You], add the [You] prefix
+                if not (newest_line.startswith('[AI]:') or newest_line.startswith('[You]:')):
+                    newest_line = f"[You]: {newest_line}"
+                
+                # Add to array if it's new
+                if newest_line not in st.session_state.dialogue_lines_array:
+                    st.session_state.dialogue_lines_array.append(newest_line)
+                    
+                    # Add the dialogue to the panel if it's from the user
+                    if newest_line.startswith('[You]:'):
+                        user_text = newest_line[6:].strip()  # Remove the [You]: prefix
+                        add_dialogue_to_panel(user_text, is_ai=False)
+        
         # Generate buttons
-        col3, col4, col5 = st.columns(3)
+        col3, col4 = st.columns(2)
         with col3:
             new_scene_button = st.button("New Scene")
         with col4:
-            # Enable next panel button only if we have a completed panel
-            next_panel_button = st.button("Next panel", 
-                                         disabled=st.session_state.scene_state['processing'] or 
-                                                 st.session_state.scene_state['current_stage'] != 'complete')
-        with col5:
-            # Process dialogue input and store in session state
-            if dialogue:
-                # Split dialogue by newlines and filter out empty lines
-                dialogue_lines = [line.strip() for line in dialogue.split('\n') if line.strip()]
-                
-                # Only reset dialogue index if the dialogue content has changed
-                current_dialogue = st.session_state.scene_state.get('dialogue_lines', [])
-                if dialogue_lines != current_dialogue:
-                    st.session_state.scene_state['dialogue_lines'] = dialogue_lines
-                    st.session_state.scene_state['current_dialogue_index'] = 0
-                    # Also reset dialogue offsets when dialogue changes
-                    st.session_state.scene_state['dialogue_offsets'] = {}
-            
-            # Enable next dialogue button only if we have dialogue lines and a completed panel
-            has_unused_dialogue = (st.session_state.scene_state['current_dialogue_index'] < 
-                                  len(st.session_state.scene_state['dialogue_lines']))
-            
-            next_dialogue_button = st.button("Next dialogue", 
-                                           disabled=st.session_state.scene_state['processing'] or 
-                                                   st.session_state.scene_state['current_stage'] != 'complete' or
-                                                   not has_unused_dialogue)
-
+            # Next panel button - always enabled
+            next_panel_button = st.button("Next panel")
+    
     # Show processing message in left column when generating
     if st.session_state.scene_state['processing']:
         st.info("Processing your prompts...")
@@ -1329,32 +1344,26 @@ Format your response as this JSON object:
             
     elif next_panel_button:
         if character_description and background_description:
-            # Save the current completed panel
+            # Save the current panel if it exists
             current_pos = st.session_state.scene_state['current_position']
-            st.session_state.scene_state['panels'][current_pos] = st.session_state.scene_state['combined_image']
+            if st.session_state.scene_state.get('combined_image') is not None:
+                st.session_state.scene_state['panels'][current_pos] = st.session_state.scene_state['combined_image']
+            
+            # Increment panel count
             st.session_state.scene_state['panel_count'] += 1
             
             # Create a new panel position
             next_pos = f"panel_{st.session_state.scene_state['panel_count']}"
             st.session_state.scene_state['current_position'] = next_pos
-            st.session_state.scene_state['current_stage'] = 'character'  # Skip background generation
+            st.session_state.scene_state['current_stage'] = 'character'  # Always start with character generation
             st.session_state.scene_state['background_image'] = st.session_state.scene_state['scene_background']  # Reuse background
             st.session_state.scene_state['character_image'] = None
-            st.session_state['combined_image'] = None
-            st.session_state['processing'] = True
+            st.session_state.scene_state['combined_image'] = None
+            st.session_state.scene_state['processing'] = True
             
             st.rerun()
         else:
             st.warning("Please enter both character and background descriptions.")
-    
-    elif next_dialogue_button:
-        if st.session_state.scene_state['combined_image'] is not None:
-            # Set flags to process dialogue on next rerun
-            st.session_state.process_dialogue = True
-            st.session_state.scene_state['processing'] = True
-            
-            # Force a rerun to process the dialogue
-            st.rerun()
     
     # Process the current stage if we're in processing mode
     if st.session_state.scene_state['processing']:
@@ -1401,6 +1410,12 @@ def process_panel(panel_number, panel_data, character_description=None, backgrou
         if panel_number not in st.session_state.scene_state['panel_data']:
             st.session_state.scene_state['panel_data'][panel_number] = panel_data
         
+        # Store character gender if available
+        if "exchanges" in panel_data and len(panel_data["exchanges"]) > 0:
+            first_exchange = panel_data["exchanges"][0]
+            if 'character-gender' in first_exchange:
+                st.session_state.scene_state['character_gender'] = first_exchange['character-gender']
+        
         # Process character generation and overlay on background
         if character_description:
             character_success = process_character(character_description, seed)
@@ -1413,7 +1428,11 @@ def process_panel(panel_number, panel_data, character_description=None, backgrou
             dialogue_line = panel_data['dialogue-line-japanese']
             # Add AI dialogue to the panel with proper styling
             ai_dialogue = f"[AI]: {dialogue_line}"
-            add_dialogue_to_panel(ai_dialogue, is_ai=True)
+            # Add to dialogue array
+            if 'dialogue_lines_array' not in st.session_state:
+                st.session_state.dialogue_lines_array = []
+            st.session_state.dialogue_lines_array.append(ai_dialogue)
+            add_dialogue_to_panel(dialogue_line, is_ai=True)
         # Check if dialogue is in the exchanges array
         elif 'exchanges' in panel_data and len(panel_data['exchanges']) > 0:
             first_exchange = panel_data['exchanges'][0]
@@ -1421,7 +1440,11 @@ def process_panel(panel_number, panel_data, character_description=None, backgrou
                 dialogue_line = first_exchange['dialogue-line-japanese']
                 # Add AI dialogue to the panel with proper styling
                 ai_dialogue = f"[AI]: {dialogue_line}"
-                add_dialogue_to_panel(ai_dialogue, is_ai=True)
+                # Add to dialogue array
+                if 'dialogue_lines_array' not in st.session_state:
+                    st.session_state.dialogue_lines_array = []
+                st.session_state.dialogue_lines_array.append(ai_dialogue)
+                add_dialogue_to_panel(dialogue_line, is_ai=True)
         
         return True
 

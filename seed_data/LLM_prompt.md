@@ -54,7 +54,11 @@ Begin with a new character image prompt describing the character's appearance an
 
 Provide the first dialogue line in Japanese, spoken by the character, using at least one study word naturally in the first panel and incorporating others where appropriate without forcing them unnaturally. Example: "ああ、やっと来たね。急いで、遅れているよ。" – "Oh, you're finally here. Hurry up, we're late!"
 
-Output a JSON object with the current "panel-number" (starting at 1 and incrementing with each new panel) and an "exchanges" array initially containing the first LLM dialogue line with its associated character image prompt.
+Output a JSON object - you *must* include all of the following:
+- the current "panel-number" (starting at 1 and incrementing with each new panel)
+- character-image-prompt-english (will be used in generate the character image for the panel)
+- character-gender (will be used in generating audio for the dialogue line)
+- short dialogue of one, or occasionally, two sentences - *never refer to the user as [friend's name] or similar*
 
 Wait for the user's response, and respond with the next LLM dialogue line without including a new "character-image-prompt-english" (the initial prompt for the panel persists).
 
