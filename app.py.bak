@@ -327,7 +327,422 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
     text_width = max([draw.textbbox((0, 0), line, font=font)[2] for line in lines])
     text_height = sum(line_heights)
     
-    padding = 8
+    # Calculate bubble size with further reduced padding (was 12)
+    padding = 8  # Further reduced padding for more compact bubbles
+    bubble_width = text_width + padding * 2
+    bubble_height = text_height + padding * 2
+    
+    # Calculate image dimensions
+    img_width, img_height = img_with_bubble.size
+    
+    # Set bubble position based on whether it's AI or user dialogue
+    if is_ai:
+        # AI dialogue: left aligned very near the left border
+        base_x = bubble_width // 2 + 20  # Very close to left edge
+    else:
+        # User dialogue: right edge aligned with center line of panel
+        base_x = (img_width // 2) - (bubble_width // 2)  # Right edge at center line
+    
+    base_y = 40  # Start closer to the top
+    
+    # Apply only a small horizontal variation to keep bubbles more aligned
+    if is_ai:
+        # Less horizontal variation for AI bubbles to keep them aligned left
+        horizontal_shift = ((offset_y // 60) % 2) * (img_width // 30)
+    else:
+        # Less horizontal variation for user bubbles too
+        horizontal_shift = ((offset_y // 60) % 2) * (img_width // 30)
+    
+    # Adjust position based on offset with smaller vertical increments
+    position = (base_x + horizontal_shift, base_y + offset_y)
+    
+    # Calculate bubble coordinates
+    x, y = position
+    x = min(max(x, bubble_width // 2 + 20), img_with_bubble.width - bubble_width // 2 - 20)
+    y = min(max(y, bubble_height // 2 + 20), img_with_bubble.height - bubble_height - 20)
+    
+    left = x - bubble_width // 2
+    top = y - bubble_height // 2
+    right = x + bubble_width // 2
+    bottom = y + bubble_height // 2
+    
+    # Set bubble and text colors based on whether it's AI or user dialogue
+    if is_ai:
+        # AI dialogue: white fill with jade text/outline
+        bubble_color = (255, 255, 255, 230)  # White with transparency
+        text_color = (0, 100, 80)  # Jade text
+        outline_color = (0, 80, 60)  # Darker jade for outline
+    else:
+        # User dialogue: white fill with dark orange text/outline
+        bubble_color = (255, 255, 255, 230)  # White with transparency
+        text_color = (180, 80, 0)  # Dark orange text
+        outline_color = (150, 60, 0)  # Darker orange for outline
+        
+    # Draw bubble with rounded corners
+    corner_radius = 12  # Further reduced corner radius (was 15)
+    draw.rounded_rectangle([left, top, right, bottom], 
+                           fill=bubble_color, 
+                           outline=outline_color, 
+                           width=2, 
+                           radius=corner_radius)
+    
+    # Draw text in bubble
+    y_text = top + padding
+    for line in lines:
+        line_width = draw.textbbox((0, 0), line, font=font)[2]
+        
+        # Text alignment: center for both AI and user bubbles
+        x_text = left + (bubble_width - line_width) // 2  # Center-aligned within the bubble
+            
+        draw.text((x_text, y_text), line, font=font, fill=text_color)
+        y_text += line_heights[0]  # Assuming all lines have same height
+    
+    return img_with_bubble
+
+def alpha_blend(foreground, background):
+    """Blend foreground image with background using alpha blending."""
+    # Ensure both images are in RGBA format
+    foreground = foreground.convert("RGBA")
+    background = background.convert("RGBA")
+
+    # Convert images to NumPy arrays
+    fg_np = np.array(foreground)
+    bg_np = np.array(background)
+
+    # Extract the alpha channel from the foreground
+    alpha_channel = fg_np[:, :, 3] / 255.0  # Normalize alpha to [0, 1]
+
+    # Create an output image
+    output = np.zeros_like(bg_np)
+
+    # Perform alpha blending
+    for c in range(0, 3):  # Loop over RGB channels
+        output[:, :, c] = (alpha_channel * fg_np[:, :, c] + (1 - alpha_channel) * bg_np[:, :, c])
+
+    # Set the alpha channel of the output image
+    output[:, :, 3] = 255  # Set alpha to fully opaque
+
+    return Image.fromarray(output, 'RGBA')
+
+def overlay_images(background_image, character_image):
+    """Overlay the character image on top of the background image using alpha blending."""
+    # Ensure both images are in RGBA mode and not None
+    if background_image is None or character_image is None:
+        add_debug_message("Error: Received None image in overlay_images function")
+        # Return a placeholder image instead
+        placeholder = Image.new('RGBA', (800, 400), color=(200, 200, 200, 255))
+        draw = ImageDraw.Draw(placeholder)
+        draw.text((400, 200), "Image Processing Error", fill=(0, 0, 0))
+        return placeholder
+        
+    # Continue with normal processing
+    background_image = background_image.convert("RGBA")
+    character_image = make_background_transparent_flood_fill(character_image)  # Use flood fill for transparency
+
+    # Get dimensions of the background image
+    bg_width, bg_height = background_image.size
+
+    # Create a new canvas with the desired dimensions (e.g., 800x400)
+    canvas_width = 800  # Desired canvas width
+    canvas_height = 400  # Desired canvas height
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 0))  # Transparent background
+
+    # Resize background image to fit canvas
+    background_image_resized = background_image.resize((canvas_width, canvas_height))  # Resize background to fit canvas
+
+    # Paste the background image onto the canvas
+    canvas.paste(background_image_resized, (0, 0))  # Paste background at the top-left corner
+
+    # Calculate position to align the bottom of the character image with the bottom of the canvas
+    # Position character closer to the right edge (4/5 of the way across)
+    position_x = int(canvas_width * (2/3)) - (character_image.width // 2)  # Position two-thirds of the way to the right
+    position_y = canvas_height - character_image.height  # Align bottom
+
+    # Create a new canvas for the character at the correct position
+    character_canvas = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 0))
+    character_canvas.paste(character_image, (position_x, position_y))
+
+    # Overlay the positioned character on the canvas using alpha blending
+    combined_image = alpha_blend(character_canvas, canvas)
+
+    return combined_image
+
+def apply_gaussian_blur(image):
+    """Apply Gaussian blur to an image."""
+    # Ensure image is in RGBA mode
+    image = image.convert("RGBA")
+    
+    # Convert image to NumPy array for Gaussian blur
+    img_np = np.array(image)
+    
+    # Apply Gaussian blur
+    blurred_np = cv2.GaussianBlur(img_np, (5, 5), 0)  # Adjust kernel size as needed
+    
+    # Convert back to PIL Image
+    blurred_image = Image.fromarray(blurred_np, 'RGBA')
+    
+    return blurred_image
+
+def fade_transition(placeholder, old_image, new_image, steps=5):
+    """Create a fade transition between two images."""
+    for alpha in range(0, steps + 1):
+        # Calculate the alpha value for blending
+        alpha_value = alpha / steps
+        
+        # Create a blended image
+        blended_np = np.array(old_image) * (1 - alpha_value) + np.array(new_image) * alpha_value
+        blended_image = Image.fromarray(blended_np.astype(np.uint8), 'RGBA')
+        
+        # Update the placeholder with the blended image
+        placeholder.image(blended_image, use_container_width=True)
+        
+        # Shorter delay for faster animation (0.5 seconds total for 5 steps = 0.1 seconds per step)
+        time.sleep(0.1)  # Updated delay for faster transition
+
+def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_y=0, weight='regular', is_ai=True):
+    """Create a speech bubble with text on the image."""
+    # Create a copy of the image to draw on
+    img_with_bubble = image.copy()
+    draw = ImageDraw.Draw(img_with_bubble)
+    
+    # Load the appropriate font based on weight
+    font_path = "fonts/NotoSansJP-Regular.ttf"
+    if weight == 'bold':
+        font_path = "fonts/NotoSansJP-Bold.ttf"
+    
+    try:
+        # Further reduced font size (was 13)
+        font = ImageFont.truetype(font_path, 11)
+    except (IOError, OSError) as e:
+        # Print detailed error for debugging
+        print(f"Font error: {e}")
+        print(f"Font not found or cannot be used at {font_path}, falling back to default")
+        # Try to find any available font that can handle Japanese
+        try:
+            # Try to use a system font that might support Japanese
+            system_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+            font = system_font
+        except:
+            font = ImageFont.load_default()  # Last resort fallback
+    
+    max_width_adjusted = 60  # Much wider to avoid unnecessary wrapping
+    wrapped_text = textwrap.fill(text, width=max_width_adjusted)
+    lines = wrapped_text.split('\n')
+    
+    # Calculate text size
+    line_heights = [draw.textbbox((0, 0), line, font=font)[3] for line in lines]
+    text_width = max([draw.textbbox((0, 0), line, font=font)[2] for line in lines])
+    text_height = sum(line_heights)
+    
+    # Calculate bubble size with further reduced padding (was 12)
+    padding = 8  # Further reduced padding for more compact bubbles
+    bubble_width = text_width + padding * 2
+    bubble_height = text_height + padding * 2
+    
+    # Calculate image dimensions
+    img_width, img_height = img_with_bubble.size
+    
+    # Set bubble position based on whether it's AI or user dialogue
+    if is_ai:
+        # AI dialogue: left aligned very near the left border
+        base_x = bubble_width // 2 + 20  # Very close to left edge
+    else:
+        # User dialogue: right edge aligned with center line of panel
+        base_x = (img_width // 2) - (bubble_width // 2)  # Right edge at center line
+    
+    base_y = 40  # Start closer to the top
+    
+    # Apply only a small horizontal variation to keep bubbles more aligned
+    if is_ai:
+        # Less horizontal variation for AI bubbles to keep them aligned left
+        horizontal_shift = ((offset_y // 60) % 2) * (img_width // 30)
+    else:
+        # Less horizontal variation for user bubbles too
+        horizontal_shift = ((offset_y // 60) % 2) * (img_width // 30)
+    
+    # Adjust position based on offset with smaller vertical increments
+    position = (base_x + horizontal_shift, base_y + offset_y)
+    
+    # Calculate bubble coordinates
+    x, y = position
+    x = min(max(x, bubble_width // 2 + 20), img_with_bubble.width - bubble_width // 2 - 20)
+    y = min(max(y, bubble_height // 2 + 20), img_with_bubble.height - bubble_height - 20)
+    
+    left = x - bubble_width // 2
+    top = y - bubble_height // 2
+    right = x + bubble_width // 2
+    bottom = y + bubble_height // 2
+    
+    # Set bubble and text colors based on whether it's AI or user dialogue
+    if is_ai:
+        # AI dialogue: white fill with jade text/outline
+        bubble_color = (255, 255, 255, 230)  # White with transparency
+        text_color = (0, 100, 80)  # Jade text
+        outline_color = (0, 80, 60)  # Darker jade for outline
+    else:
+        # User dialogue: white fill with dark orange text/outline
+        bubble_color = (255, 255, 255, 230)  # White with transparency
+        text_color = (180, 80, 0)  # Dark orange text
+        outline_color = (150, 60, 0)  # Darker orange for outline
+        
+    # Draw bubble with rounded corners
+    corner_radius = 12  # Further reduced corner radius (was 15)
+    draw.rounded_rectangle([left, top, right, bottom], 
+                           fill=bubble_color, 
+                           outline=outline_color, 
+                           width=2, 
+                           radius=corner_radius)
+    
+    # Draw text in bubble
+    y_text = top + padding
+    for line in lines:
+        line_width = draw.textbbox((0, 0), line, font=font)[2]
+        
+        # Text alignment: center for both AI and user bubbles
+        x_text = left + (bubble_width - line_width) // 2  # Center-aligned within the bubble
+            
+        draw.text((x_text, y_text), line, font=font, fill=text_color)
+        y_text += line_heights[0]  # Assuming all lines have same height
+    
+    return img_with_bubble
+
+def alpha_blend(foreground, background):
+    """Blend foreground image with background using alpha blending."""
+    # Ensure both images are in RGBA format
+    foreground = foreground.convert("RGBA")
+    background = background.convert("RGBA")
+
+    # Convert images to NumPy arrays
+    fg_np = np.array(foreground)
+    bg_np = np.array(background)
+
+    # Extract the alpha channel from the foreground
+    alpha_channel = fg_np[:, :, 3] / 255.0  # Normalize alpha to [0, 1]
+
+    # Create an output image
+    output = np.zeros_like(bg_np)
+
+    # Perform alpha blending
+    for c in range(0, 3):  # Loop over RGB channels
+        output[:, :, c] = (alpha_channel * fg_np[:, :, c] + (1 - alpha_channel) * bg_np[:, :, c])
+
+    # Set the alpha channel of the output image
+    output[:, :, 3] = 255  # Set alpha to fully opaque
+
+    return Image.fromarray(output, 'RGBA')
+
+def overlay_images(background_image, character_image):
+    """Overlay the character image on top of the background image using alpha blending."""
+    # Ensure both images are in RGBA mode and not None
+    if background_image is None or character_image is None:
+        add_debug_message("Error: Received None image in overlay_images function")
+        # Return a placeholder image instead
+        placeholder = Image.new('RGBA', (800, 400), color=(200, 200, 200, 255))
+        draw = ImageDraw.Draw(placeholder)
+        draw.text((400, 200), "Image Processing Error", fill=(0, 0, 0))
+        return placeholder
+        
+    # Continue with normal processing
+    background_image = background_image.convert("RGBA")
+    character_image = make_background_transparent_flood_fill(character_image)  # Use flood fill for transparency
+
+    # Get dimensions of the background image
+    bg_width, bg_height = background_image.size
+
+    # Create a new canvas with the desired dimensions (e.g., 800x400)
+    canvas_width = 800  # Desired canvas width
+    canvas_height = 400  # Desired canvas height
+    canvas = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 0))  # Transparent background
+
+    # Resize background image to fit canvas
+    background_image_resized = background_image.resize((canvas_width, canvas_height))  # Resize background to fit canvas
+
+    # Paste the background image onto the canvas
+    canvas.paste(background_image_resized, (0, 0))  # Paste background at the top-left corner
+
+    # Calculate position to align the bottom of the character image with the bottom of the canvas
+    # Position character closer to the right edge (4/5 of the way across)
+    position_x = int(canvas_width * (2/3)) - (character_image.width // 2)  # Position two-thirds of the way to the right
+    position_y = canvas_height - character_image.height  # Align bottom
+
+    # Create a new canvas for the character at the correct position
+    character_canvas = Image.new("RGBA", (canvas_width, canvas_height), (255, 255, 255, 0))
+    character_canvas.paste(character_image, (position_x, position_y))
+
+    # Overlay the positioned character on the canvas using alpha blending
+    combined_image = alpha_blend(character_canvas, canvas)
+
+    return combined_image
+
+def apply_gaussian_blur(image):
+    """Apply Gaussian blur to an image."""
+    # Ensure image is in RGBA mode
+    image = image.convert("RGBA")
+    
+    # Convert image to NumPy array for Gaussian blur
+    img_np = np.array(image)
+    
+    # Apply Gaussian blur
+    blurred_np = cv2.GaussianBlur(img_np, (5, 5), 0)  # Adjust kernel size as needed
+    
+    # Convert back to PIL Image
+    blurred_image = Image.fromarray(blurred_np, 'RGBA')
+    
+    return blurred_image
+
+def fade_transition(placeholder, old_image, new_image, steps=5):
+    """Create a fade transition between two images."""
+    for alpha in range(0, steps + 1):
+        # Calculate the alpha value for blending
+        alpha_value = alpha / steps
+        
+        # Create a blended image
+        blended_np = np.array(old_image) * (1 - alpha_value) + np.array(new_image) * alpha_value
+        blended_image = Image.fromarray(blended_np.astype(np.uint8), 'RGBA')
+        
+        # Update the placeholder with the blended image
+        placeholder.image(blended_image, use_container_width=True)
+        
+        # Shorter delay for faster animation (0.5 seconds total for 5 steps = 0.1 seconds per step)
+        time.sleep(0.1)  # Updated delay for faster transition
+
+def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_y=0, weight='regular', is_ai=True):
+    """Create a speech bubble with text on the image."""
+    # Create a copy of the image to draw on
+    img_with_bubble = image.copy()
+    draw = ImageDraw.Draw(img_with_bubble)
+    
+    # Load the appropriate font based on weight
+    font_path = "fonts/NotoSansJP-Regular.ttf"
+    if weight == 'bold':
+        font_path = "fonts/NotoSansJP-Bold.ttf"
+    
+    try:
+        # Further reduced font size (was 13)
+        font = ImageFont.truetype(font_path, 11)
+    except (IOError, OSError) as e:
+        # Print detailed error for debugging
+        print(f"Font error: {e}")
+        print(f"Font not found or cannot be used at {font_path}, falling back to default")
+        # Try to find any available font that can handle Japanese
+        try:
+            # Try to use a system font that might support Japanese
+            system_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
+            font = system_font
+        except:
+            font = ImageFont.load_default()  # Last resort fallback
+    
+    max_width_adjusted = 60  # Much wider to avoid unnecessary wrapping
+    wrapped_text = textwrap.fill(text, width=max_width_adjusted)
+    lines = wrapped_text.split('\n')
+    
+    # Calculate text size
+    line_heights = [draw.textbbox((0, 0), line, font=font)[3] for line in lines]
+    text_width = max([draw.textbbox((0, 0), line, font=font)[2] for line in lines])
+    text_height = sum(line_heights)
+    
+    # Calculate bubble size with further reduced padding (was 12)
+    padding = 8  # Further reduced padding for more compact bubbles
     bubble_width = text_width + padding * 2
     bubble_height = text_height + padding * 2
     
@@ -637,91 +1052,8 @@ def main():
     # Add a debug message for the current time
     add_debug_message(f"Debug: Current time: {time.strftime('%H:%M:%S')}")
     
-    # Check for generate_panel_1 flag first (this takes priority)
-    if 'generate_panel_1' in st.session_state and st.session_state.generate_panel_1:
-        # Reset the flag immediately to prevent double execution
-        st.session_state.generate_panel_1 = False
-        add_debug_message("Automatically generating Panel 1...")
-        
-        # Get necessary data from session state
-        scenario_description_english = st.session_state.get('scenario_description_english', '')
-        introduction_english = st.session_state.get('introduction_english', '')
-        background_image_prompt_english = st.session_state.get('background_image_prompt_english', '')
-        word_list = st.session_state.get('word_list', [])
-        
-        # Create a prompt for Panel 1
-        panel1_prompt = f"""NEW SESSION: Ignore all previous context. You are acting as a conversational partner in a Japanese language learning app. Your task is to generate Panel 1 for the conversation scenario described below.
-
-**Output only JSON in your response, exactly as specified in the format below. Do not include any additional content outside the JSON format.**
-
-Here's the scenario information from Panel 0:
-- Scenario: {scenario_description_english}
-- Introduction: {introduction_english}
-- Background: {background_image_prompt_english}
-- Word list: {', '.join(word_list)}
-
-Generate Panel 1 with a character image prompt and the first dialogue line in Japanese.
-Use at least one study word naturally in this first dialogue line.
-
-Your character image prompt must follow these requirements:
-- Focus ONLY on the character - do NOT include any environmental details or positioning
-- Specify the character's age, gender, and appearance (height, build, glasses, etc.)
-- State that the character is Japanese unless the scenario indicates otherwise
-- Describe clothing in general terms without colors or patterns
-- Briefly describe the character's current action or emotion
-- NEVER include colors (e.g., "brown", "red", "blue"), patterns, or style information
-
-Format your response as this JSON object:
-```json
-{{
-    "panel-number": 1,
-    "exchanges": [
-        {{
-            "character-image-prompt-english": "[Detailed character description including appearance and emotion]",
-            "dialogue-line-japanese": "[First dialogue line in Japanese using at least one study word]"
-        }}
-    ]
-}}
-```"""
-        
-        # Call the API to generate Panel 1
-        panel1_response = call_gemini_api(panel1_prompt)
-        add_debug_message(f"Raw Panel 1 response: {panel1_response}")
-        
-        # Parse the Panel 1 response
-        panel1_data = parse_llm_response(panel1_response)
-        add_debug_message(f"Parsed Panel 1 data: {panel1_data}")
-        
-        if panel1_data is not None and panel1_data.get("panel-number") == 1:
-            # Store Panel 1 data in session state
-            add_debug_message(f"Successfully generated Panel 1: {panel1_data}")
-            
-            # Extract the character image prompt and dialogue line
-            if "exchanges" in panel1_data and len(panel1_data["exchanges"]) > 0:
-                first_exchange = panel1_data["exchanges"][0]
-                character_image_prompt = first_exchange.get("character-image-prompt-english", "")
-                
-                # Store in session state
-                st.session_state.character_image_prompt_english = character_image_prompt
-                
-                # Extract dialogue line from the first exchange
-                dialogue_line = first_exchange.get("dialogue-line-japanese", "")
-                
-                # Update the scene state to panel 1
-                st.session_state.scene_state["current_position"] = "panel_1"
-                st.session_state.scene_state["current_panel_number"] = 1
-                
-                # Process panel 1 using the new panel processing function
-                st.session_state.scene_state["processing"] = True
-                process_panel(1, panel1_data, character_description=character_image_prompt, seed=st.session_state.seed)
-        else:
-            add_debug_message("Failed to generate Panel 1 or response was invalid")
-        
-        # Force a rerun to update the UI
-        st.rerun()
-    
-    # Check for process_llm_response flag (only if generate_panel_1 wasn't processed)
-    elif 'process_llm_response' in st.session_state and st.session_state.process_llm_response:
+    # Check for process_llm_response flag or incoming response from LLM
+    if 'process_llm_response' in st.session_state and st.session_state.process_llm_response:
         # Reset the flag immediately to prevent infinite loops
         st.session_state.process_llm_response = False
         
@@ -988,26 +1320,39 @@ Format your response as this JSON object:
                         add_debug_message("Automatically generating Panel 1...")
                         
                         # Create a prompt for Panel 1
-                        panel1_prompt = f"""NEW SESSION: Ignore all previous context. You are acting as a conversational partner in a Japanese language learning app. 
-                        The user has responded to your previous dialogue line in our scenario: {scenario_description_english}.
-                        
-                        User's message: 
-                        
-                        Please respond with the next dialogue line in Japanese. Use natural conversational Japanese 
-                        and try to incorporate one of these study words if possible: {', '.join(word_list[:5])}.
-                        
-                        Format your response as a JSON object with a dialogue-line-japanese field:
-                        ```json
-                        {{
-                            "panel-number": 1,
-                            "exchanges": [
-                                {{
-                                    "character-image-prompt-english": "[Detailed character description including appearance and emotion]",
-                                    "dialogue-line-japanese": "[First dialogue line in Japanese using at least one study word]"
-                                }}
-                            ]
-                        }}
-                        ```"""
+                        panel1_prompt = f"""NEW SESSION: Ignore all previous context. You are acting as a conversational partner in a Japanese language learning app. Your task is to generate Panel 1 for the conversation scenario described below.
+
+**Output only JSON in your response, exactly as specified in the format below. Do not include any additional content outside the JSON format.**
+
+Here's the scenario information from Panel 0:
+- Scenario: {scenario_description_english}
+- Introduction: {introduction_english}
+- Background: {background_image_prompt_english}
+- Word list: {', '.join(word_list)}
+
+Generate Panel 1 with a character image prompt and the first dialogue line in Japanese.
+Use at least one study word naturally in this first dialogue line.
+
+Your character image prompt must follow these requirements:
+- Focus ONLY on the character - do NOT include any environmental details or positioning
+- Specify the character's age, gender, and appearance (height, build, glasses, etc.)
+- State that the character is Japanese unless the scenario indicates otherwise
+- Describe clothing in general terms without colors or patterns
+- Briefly describe the character's current action or emotion
+- NEVER include colors (e.g., "brown", "red", "blue"), patterns, or style information
+
+Format your response as this JSON object:
+```json
+{{
+    "panel-number": 1,
+    "exchanges": [
+        {{
+            "character-image-prompt-english": "[Detailed character description including appearance and emotion]",
+            "dialogue-line-japanese": "[First dialogue line in Japanese using at least one study word]"
+        }}
+    ]
+}}
+```"""
                         
                         # Call the API to generate Panel 1
                         panel1_response = call_gemini_api(panel1_prompt)
@@ -1184,7 +1529,7 @@ Format your response as this JSON object:
                 # Add user message to chat history
                 st.session_state.chat_history.append({"role": "user", "content": user_input})
                 
-                # Add user dialogue to the panel with proper styling
+                # Add user dialogue to the panel
                 user_dialogue = f"[You]: {user_input}"
                 add_dialogue_to_panel(user_dialogue, is_ai=False)
                 
@@ -1211,7 +1556,8 @@ Format your response as this JSON object:
                     "panel-number": {current_panel.replace('panel_', '')},
                     "dialogue-line-japanese": "[Your Japanese response here]"
                 }}
-                ```"""
+                ```
+                """
                 
                 # Call Gemini for a response
                 response = call_gemini_api(dialogue_prompt)
@@ -1225,7 +1571,7 @@ Format your response as this JSON object:
                     # Store the dialogue line in session state
                     st.session_state.dialogue_japanese = dialogue_line
                     
-                    # Add AI dialogue to the panel with proper styling
+                    # Add AI dialogue to the panel
                     ai_dialogue = f"[AI]: {dialogue_line}"
                     add_dialogue_to_panel(ai_dialogue, is_ai=True)
                 

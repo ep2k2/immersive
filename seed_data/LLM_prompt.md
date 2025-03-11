@@ -46,7 +46,7 @@ Begin with a new character image prompt describing the character's appearance an
 **Character Image Prompt Requirements:**
 
 ***Focus:** Describe *only* the character. Do *not* include environmental details, positioning (e.g., "in front of"), or background elements.
-*   **Appearance:** Specify the character's age, gender, and general appearance (e.g., height, build, glasses or earrings etc.). State that characters are Japanese unless the scenario explicitly indicates otherwise.
+*   **Appearance:** Specify the character's age, gender, and general appearance including if wearing "round glasses", "long earrings", "a slouchy hat" etc.). State that characters are Japanese unless the scenario explicitly indicates otherwise.
 *   **Clothing:** Describe clothing in general terms (e.g., "a jacket," "a dress," "dungarees"). Omit specific colors and patterns.
 *   **Exceptions for Patterns:** If an item is *typically* patterned or branded (e.g., a baseball cap, a yukata), specify if it is *plain* (e.g., "a plain baseball cap," "a plain yukata").
 *   **Actions and Emotions:** Briefly describe the character's current action or emotion (e.g., "waiting expectantly," "smiling proudly," "looking focused").
@@ -67,6 +67,7 @@ Output for an exchange:
 {
     "panel-number": 1,
     "character-image-prompt-english": "A Japanese friend is bargaining with a vendor, looking focused. They have long hair and a casual jacket.",
+    "character-gender": "female"
     "dialogue-line-japanese": "ねえ、この魚、いくらで買える？"
 }
 ```
@@ -76,6 +77,7 @@ Output after completing 3–5 exchanges and starting a new panel:
 {
     "panel-number": 2,
     "character-image-prompt-english": "The friend holds up a bag of fresh vegetables, smiling proudly.",
+    "character-gender": "female"
     "dialogue-line-japanese": "見て、これ、いい買い物だったよ！"
 }
 ```
