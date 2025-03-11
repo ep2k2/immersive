@@ -1,18 +1,29 @@
 import streamlit as st
 import os
 import requests  # Import the requests library
+import re  # Import regular expressions module
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFont
 from io import BytesIO
+import time
+import random
 import base64
-import time  # Import time for sleep functionality
-import random  # Import random for generating random seeds
 import cv2
 import numpy as np
 import textwrap
+import google.generativeai as genai
+import json
+
 # Feature flags for development
-ENABLE_IMAGE_GENERATION = True  # Set to False to skip image generation (background and character)
-ENABLE_AUDIO_GENERATION = True  # Set to False to skip audio generation for dialogue
+ENABLE_IMAGE_GENERATION = True # Set to False to skip image generation (background and character)
+ENABLE_AUDIO_GENERATION = False # Set to False to skip audio generation for dialogue
+
+DEBUG_MODE = True  # Set to True to enable debug output
+
+def add_debug_message(message):
+    """Print debug message to terminal if debug mode is enabled."""
+    if DEBUG_MODE:
+        print("DEBUG:", message)  # Print to terminal for reference
 
 def init_app():
     """Initialize the Streamlit app with basic configuration."""
@@ -228,7 +239,7 @@ def fade_transition(placeholder, old_image, new_image, steps=5):
         # Shorter delay for faster animation (0.5 seconds total for 5 steps = 0.1 seconds per step)
         time.sleep(0.1)  # Updated delay for faster transition
 
-def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_y=0, weight='regular'):
+def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_y=0, weight='regular', is_ai=True):
     """Create a speech bubble with text on the image."""
     # Create a copy of the image to draw on
     img_with_bubble = image.copy()
@@ -240,7 +251,8 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
         font_path = "fonts/NotoSansJP-Bold.ttf"
     
     try:
-        font = ImageFont.truetype(font_path, 15)
+        # Further reduced font size (was 13)
+        font = ImageFont.truetype(font_path, 11)
     except (IOError, OSError) as e:
         # Print detailed error for debugging
         print(f"Font error: {e}")
@@ -248,7 +260,7 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
         # Try to find any available font that can handle Japanese
         try:
             # Try to use a system font that might support Japanese
-            system_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 15)
+            system_font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 11)
             font = system_font
         except:
             font = ImageFont.load_default()  # Last resort fallback
@@ -262,22 +274,31 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
     text_width = max([draw.textbbox((0, 0), line, font=font)[2] for line in lines])
     text_height = sum(line_heights)
     
-    # Calculate bubble size with padding
-    padding = 20  # Slightly increased padding for larger font
+    # Calculate bubble size with further reduced padding (was 12)
+    padding = 8  # Further reduced padding for more compact bubbles
     bubble_width = text_width + padding * 2
     bubble_height = text_height + padding * 2
     
     # Calculate image dimensions
     img_width, img_height = img_with_bubble.size
     
-    # Start position closer to top, with offset based on dialogue index
-    # Position centered at 1/3 of the way across the panel
-    base_x = img_width // 3
-    base_y = 40  # Start closer to the top (was 80)
+    # Set bubble position based on whether it's AI or user dialogue
+    if is_ai:
+        # AI dialogue: left aligned very near the left border
+        base_x = bubble_width // 2 + 20  # Very close to left edge
+    else:
+        # User dialogue: right edge aligned with center line of panel
+        base_x = (img_width // 2) - (bubble_width // 2)  # Right edge at center line
+    
+    base_y = 40  # Start closer to the top
     
     # Apply only a small horizontal variation to keep bubbles more aligned
-    # Use a smaller fraction of the width for horizontal shift
-    horizontal_shift = ((offset_y // 60) % 3 - 1) * (img_width // 10)  # Reduced from 1/5 to 1/10
+    if is_ai:
+        # Less horizontal variation for AI bubbles to keep them aligned left
+        horizontal_shift = ((offset_y // 60) % 2) * (img_width // 30)
+    else:
+        # Less horizontal variation for user bubbles too
+        horizontal_shift = ((offset_y // 60) % 2) * (img_width // 30)
     
     # Adjust position based on offset with smaller vertical increments
     position = (base_x + horizontal_shift, base_y + offset_y)
@@ -292,20 +313,35 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
     right = x + bubble_width // 2
     bottom = y + bubble_height // 2
     
+    # Set bubble and text colors based on whether it's AI or user dialogue
+    if is_ai:
+        # AI dialogue: white fill with jade text/outline
+        bubble_color = (255, 255, 255, 230)  # White with transparency
+        text_color = (0, 100, 80)  # Jade text
+        outline_color = (0, 80, 60)  # Darker jade for outline
+    else:
+        # User dialogue: white fill with dark orange text/outline
+        bubble_color = (255, 255, 255, 230)  # White with transparency
+        text_color = (180, 80, 0)  # Dark orange text
+        outline_color = (150, 60, 0)  # Darker orange for outline
+        
     # Draw bubble with rounded corners
-    corner_radius = 20
+    corner_radius = 12  # Further reduced corner radius (was 15)
     draw.rounded_rectangle([left, top, right, bottom], 
-                          fill=(255, 255, 255, 230), 
-                          outline=(0, 0, 0), 
-                          width=2, 
-                          radius=corner_radius)
+                           fill=bubble_color, 
+                           outline=outline_color, 
+                           width=2, 
+                           radius=corner_radius)
     
     # Draw text in bubble
     y_text = top + padding
     for line in lines:
         line_width = draw.textbbox((0, 0), line, font=font)[2]
-        x_text = left + (bubble_width - line_width) // 2
-        draw.text((x_text, y_text), line, font=font, fill=(0, 0, 0))
+        
+        # Text alignment: center for both AI and user bubbles
+        x_text = left + (bubble_width - line_width) // 2  # Center-aligned within the bubble
+            
+        draw.text((x_text, y_text), line, font=font, fill=text_color)
         y_text += line_heights[0]  # Assuming all lines have same height
     
     return img_with_bubble
@@ -313,55 +349,99 @@ def create_speech_bubble(image, text, position=(400, 200), max_width=30, offset_
 def init_scene_state():
     """Initialize or reset the scene state in session."""
     default_state = {
-        'panels': {
-            'top_right': None,
-            'bottom_right': None,
-            'top_left': None,
-            'bottom_left': None
-        },
-        'panel_count': 0,                 # Track how many panels we've filled
-        'current_position': 'top_right',  # Start with top right panel
-        'current_stage': 'background',    # Start with background generation
-        'scene_background': None,         # Store the scene background for reuse
+        'panels': {},  # Empty dictionary to store panels
+        'panel_count': 0,
+        'current_position': 'panel_0',  # Simplified position naming
+        'current_panel_number': 0,  # Track the current panel number (0 for setup, 1+ for content)
+        'panel_data': {},  # Store panel-specific data (character images, dialogue, etc.)
+        'current_stage': 'background',
+        'scene_background': None,
         'background_image': None,
         'character_image': None,
         'combined_image': None,
-        'processing': False,              # Flag to track if we're in the middle of processing
-        'dialogue_lines': [],             # Store dialogue lines
-        'current_dialogue_index': 0,      # Track which dialogue line we're on
-        'dialogue_offsets': {},           # Track vertical offsets for dialogue in each panel
-        'dialogue_audio': {}              # Store audio for each dialogue line
+        'processing': False,
+        'dialogue_lines': [],
+        'current_dialogue_index': 0,
+        'dialogue_offsets': {},
+        'dialogue_audio': {}
     }
     
-    if 'scene_state' not in st.session_state:
-        st.session_state.scene_state = default_state
-    else:
-        # Ensure all required keys exist (for backward compatibility)
-        for key, value in default_state.items():
-            if key not in st.session_state.scene_state:
-                st.session_state.scene_state[key] = value
+    try:
+        if 'scene_state' not in st.session_state:
+            st.session_state.scene_state = default_state
+        else:
+            # Ensure all required keys exist (for backward compatibility)
+            for key, value in default_state.items():
+                if key not in st.session_state.scene_state:
+                    st.session_state.scene_state[key] = value
+    except RuntimeError as e:
+        # This catches the ScriptRunContext warning
+        add_debug_message(f"Note: {str(e)}")
+        # The session state will be properly initialized when the app fully loads
 
-def get_next_panel_position(current_position=None):
-    """Get the next panel position in manga reading order."""
-    # Japanese manga reading order: top-right → bottom-right → top-left → bottom-left
-    order = ['top_right', 'bottom_right', 'top_left', 'bottom_left']
+def process_dialogue(dialogue_line, current_image, current_offset, is_ai=True):
+    """Process a dialogue line and add it to the current image.
     
-    if current_position is None:
-        current_position = st.session_state.scene_state['current_position']
+    Args:
+        dialogue_line: The text to display in the speech bubble
+        current_image: The current panel image
+        current_offset: Vertical offset for positioning the bubble
+        is_ai: Whether the dialogue is from the AI (True) or user (False)
     
-    current_index = order.index(current_position)
-    next_index = (current_index + 1) % len(order)
-    return order[next_index]
-
-def process_dialogue(dialogue_line, current_image, current_offset):
-    """Process a dialogue line and add it to the current image."""
-    # Create a speech bubble with the dialogue
-    new_image = create_speech_bubble(current_image, dialogue_line, offset_y=current_offset)
+    Returns:
+        Tuple of (new_image, audio_content)
+    """
+    # Create a speech bubble with the dialogue, specifying if it's AI or user
+    new_image = create_speech_bubble(current_image, dialogue_line, offset_y=current_offset, is_ai=is_ai)
     
-    # Generate audio for the dialogue line
-    audio_content = generate_speech(dialogue_line)
+    # Generate audio for the dialogue line (only for AI dialogue)
+    audio_content = None
+    if is_ai:
+        audio_content = generate_speech(dialogue_line)
     
     return new_image, audio_content
+
+def add_dialogue_to_panel(dialogue_line, is_ai=True):
+    """Add a dialogue line to the current panel.
+    
+    Args:
+        dialogue_line: The text to display in the speech bubble
+        is_ai: Whether the dialogue is from the AI (True) or user (False)
+    """
+    # Only proceed if we have a valid panel and dialogue line
+    if not dialogue_line or not st.session_state.scene_state.get('combined_image'):
+        return
+    
+    # Get the current panel position
+    current_pos = st.session_state.scene_state.get('current_position')
+    if not current_pos:
+        return
+    
+    # Initialize offset tracking for this panel if needed
+    if current_pos not in st.session_state.scene_state['dialogue_offsets']:
+        st.session_state.scene_state['dialogue_offsets'][current_pos] = 0
+    
+    # Get current offset for this panel
+    current_offset = st.session_state.scene_state['dialogue_offsets'][current_pos]
+    
+    # Process the dialogue and get audio
+    current_image = st.session_state.scene_state['combined_image']
+    new_image, audio_content = process_dialogue(dialogue_line, current_image, current_offset, is_ai=is_ai)
+    
+    # Update the combined image with the speech bubble
+    st.session_state.scene_state['combined_image'] = new_image
+    
+    # Store the audio content if available (only for AI dialogue)
+    if audio_content and is_ai:
+        dialogue_index = st.session_state.scene_state.get('current_dialogue_index', 0)
+        audio_key = f"{current_pos}_{dialogue_index}"
+        st.session_state.scene_state['dialogue_audio'][audio_key] = audio_content
+        # Update the dialogue index
+        st.session_state.scene_state['current_dialogue_index'] = dialogue_index + 1
+    
+    # Increment the offset for the next dialogue bubble with a smaller increment for slight overlap
+    # Use a smaller increment (40-45 pixels) to create a slight overlap between bubbles
+    st.session_state.scene_state['dialogue_offsets'][current_pos] += 45
 
 def generate_speech(text):
     """Generate speech audio from text using Google's Text-to-Speech API."""
@@ -423,7 +503,54 @@ def play_audio(audio_content):
     if audio_content:
         # Create a temporary file to store the audio
         audio_file = BytesIO(audio_content)
-        st.audio(audio_file, format='audio/wav')
+        st.audio(audio_file, format='audio/wav', autoplay=True)  # Set autoplay to True
+
+def parse_llm_response(raw_response):
+    """Extract and parse the JSON from the LLM response."""
+    try:
+        # First, try to find JSON between triple backticks
+        json_pattern = r'```(?:json)?\s*({[\s\S]*?})\s*```'
+        json_match = re.search(json_pattern, raw_response)
+        
+        if json_match:
+            json_string = json_match.group(1)
+            add_debug_message(f"Extracted JSON from code block: {json_string}")
+            return json.loads(json_string)
+        
+        # If that fails, try to find the outermost JSON object
+        start_index = raw_response.find('{')
+        if start_index == -1:
+            add_debug_message("No JSON object found in response")
+            return None
+            
+        # Find matching closing brace
+        brace_count = 0
+        end_index = -1
+        
+        for i in range(start_index, len(raw_response)):
+            if raw_response[i] == '{':
+                brace_count += 1
+            elif raw_response[i] == '}':
+                brace_count -= 1
+                if brace_count == 0:
+                    end_index = i + 1
+                    break
+        
+        if end_index == -1:
+            add_debug_message("No matching closing brace found")
+            return None
+            
+        # Extract the JSON string
+        json_string = raw_response[start_index:end_index]
+        
+        add_debug_message(f"Extracted JSON String: {json_string}")
+        
+        # Parse the JSON string into a Python dictionary
+        return json.loads(json_string)
+    
+    except Exception as e:
+        add_debug_message(f"Error parsing JSON: {e}")
+        return None  # Return None if parsing fails
 
 def play_audio_with_autoplay(audio_content):
     """Play audio content in Streamlit with autoplay."""
@@ -455,8 +582,112 @@ def main():
     init_app()
     init_scene_state()
     
-    # Create two columns - left for inputs, right for image
-    left_col, right_col = st.columns([1, 3])  # 1:3 ratio for column widths
+    # Add a debug message for the current time
+    add_debug_message(f"Debug: Current time: {time.strftime('%H:%M:%S')}")
+    
+    # Check for process_llm_response flag or incoming response from LLM
+    if 'process_llm_response' in st.session_state and st.session_state.process_llm_response:
+        # Reset the flag immediately to prevent infinite loops
+        st.session_state.process_llm_response = False
+        
+        # Check if we have an LLM response to process
+        if 'llm_response' in st.session_state and st.session_state.llm_response:
+            raw_response = st.session_state.llm_response
+            
+            # Debug the raw LLM response
+            add_debug_message("Checking LLM Response")
+            add_debug_message("LLM Response is present")
+            add_debug_message(f"Raw LLM Response: {raw_response}")
+            
+            # Use the parsing function
+            llm_response = parse_llm_response(raw_response)
+            
+            # Debug the parsed LLM response
+            add_debug_message("LLM Response parsed")
+            add_debug_message(f"Parsed LLM Response: {llm_response}")
+            
+            if llm_response is not None:
+                panel_number = llm_response.get("panel-number")
+                # Set a default value if panel_number is None
+                if panel_number is None:
+                    panel_number = -1
+                
+                # Process Panel 0 (setup)
+                if panel_number == 0:
+                    # Extract values from the setup response
+                    word_list = llm_response["setup"]["word-list"]
+                    image_seed = llm_response["setup"]["image-seed"]
+                    scenario_description_english = llm_response["setup"]["scenario-description-english"]
+                    background_image_prompt_english = llm_response["setup"]["background-image-prompt-english"]
+                    introduction_english = llm_response["setup"]["introduction-english"]
+                    
+                    # Print extracted values for debugging
+                    add_debug_message(f"Word List: {word_list}")
+                    add_debug_message(f"Image Seed: {image_seed}")
+                    add_debug_message(f"Scenario Description (English): {scenario_description_english}")
+                    add_debug_message(f"Background Image Prompt (English): {background_image_prompt_english}")
+                    add_debug_message(f"Introduction (English): {introduction_english}")
+                    
+                    # Update session state with the extracted values
+                    st.session_state.word_list = word_list
+                    st.session_state.image_seed = image_seed
+                    st.session_state.scenario_description_english = scenario_description_english
+                    st.session_state.background_image_prompt_english = background_image_prompt_english
+                    st.session_state.introduction_english = introduction_english
+                    
+                    # Convert word list to a newline-separated string for display in the text area
+                    st.session_state.study_word_focus = "\n".join(word_list)
+                    
+                    # IMPORTANT: Update both seed and seed_value in session state
+                    st.session_state.seed = image_seed
+                    st.session_state.seed_value = image_seed
+                    
+                    # Process panel 0 (background generation and introduction)
+                    st.session_state.scene_state['processing'] = True
+                    process_panel(0, llm_response, background_description=background_image_prompt_english, seed=image_seed)
+                    
+                    # Automatically generate Panel 1 after Panel 0 is processed
+                    st.session_state.generate_panel_1 = True
+                
+                # Process Panel 1+ (character and dialogue)
+                elif panel_number >= 1:
+                    # Extract the character image prompt and dialogue data
+                    if "exchanges" in llm_response and len(llm_response["exchanges"]) > 0:
+                        first_exchange = llm_response["exchanges"][0]
+                        character_image_prompt = first_exchange.get("character-image-prompt-english", "")
+                        
+                        # Update the current position to match the panel number
+                        st.session_state.scene_state["current_position"] = f"panel_{panel_number}"
+                        
+                        # Process the panel (character generation and dialogue)
+                        st.session_state.scene_state['processing'] = True
+                        process_panel(panel_number, llm_response, character_description=character_image_prompt, seed=st.session_state.seed)
+                
+                # Display the scenario description and introduction if they exist
+                # Get values from session state if they're not defined in this code path
+                scenario = st.session_state.get('scenario_description_english', '')
+                intro = st.session_state.get('introduction_english', '')
+                
+                if scenario:
+                    st.success(f"Scenario: {scenario}")
+                if intro:
+                    st.info(f"Introduction: {intro}")
+                
+                # Clear the LLM response to prevent reprocessing
+                st.session_state.llm_response = None
+                
+                # Force a rerun to ensure all widgets update with the new values
+                st.rerun()
+            else:
+                # Clear invalid response
+                st.session_state.llm_response = None
+        else:
+            add_debug_message("No valid LLM response found in session state.")
+    else:
+        add_debug_message("No LLM response processing flag set.")
+    
+    # Create two columns - left for inputs, right for image display area
+    left_col, right_col = st.columns([1, 2])  # 1:2 ratio for column widths
     
     # Check if we need to process dialogue (this happens before UI rendering)
     if 'process_dialogue' in st.session_state and st.session_state.process_dialogue:
@@ -477,7 +708,8 @@ def main():
             
             # Process the dialogue and get audio
             current_image = st.session_state.scene_state['combined_image']
-            new_image, audio_content = process_dialogue(dialogue_line, current_image, current_offset)
+            # For AI dialogue, pass is_ai=True
+            new_image, audio_content = process_dialogue(dialogue_line, current_image, current_offset, is_ai=True)
             
             # Update the combined image with the speech bubble
             st.session_state.scene_state['combined_image'] = new_image
@@ -497,62 +729,239 @@ def main():
         st.session_state.process_dialogue = False
         st.session_state.scene_state['processing'] = False
     
-    # Create a dedicated audio container at the top of the page, before the columns
-    audio_container = st.container()
-    
-    # Continue with the rest of the UI rendering
     with left_col:
-        # Move the seed input section to the top - use columns to place label and input side by side
-        seed_label_col, seed_input_col = st.columns([1, 3])
-        with seed_label_col:
-            st.write("Seed:", unsafe_allow_html=True)
-        
-        with seed_input_col:
-            # Check if we need to randomize the seed
-            if 'randomize_seed' in st.session_state and st.session_state.randomize_seed:
-                # Generate a new random seed
-                seed_value = random.randint(0, 10000)
-                # Reset the flag
-                st.session_state.randomize_seed = False
-            else:
-                # Use existing seed value
-                seed_value = st.session_state.get('seed', 0)
-            
-            # Use a number input with the seed value (no label)
-            st.session_state.seed = st.number_input("Seed", min_value=0, max_value=10000, value=seed_value, format="%d", key="seed_input", label_visibility="collapsed")
-        
-        # Randomize button directly underneath the seed input
-        if st.button("🎲 Randomize"):
-            # Set a flag to randomize on next rerun
-            st.session_state.randomize_seed = True
-            # Force a rerun to update the UI immediately
-            st.rerun()
-
-        # Character and background descriptions
-        character_description = st.text_area(
-            "Enter character description:",
-            height=150,
-            placeholder="Describe the character you want to generate..."
-        )
-        
-        background_description = st.text_area(
-            "Enter background description:",
-            height=150,
-            placeholder="Describe the background you want to generate..."
-        )
-        
-        # Dialogue input
-        dialogue = st.text_area(
-            "Enter dialogue:",
-            height=100,
-            placeholder="Enter character dialogue (one line per bubble)..."
-        )
-
-        # Study word focus
+        # Study word focus - display the word list from the LLM response
         study_word_focus = st.text_area(
             "Study word focus:",
-            height=100,
+            height=150,
+            value=st.session_state.get('study_word_focus', ""),
             placeholder="Enter words or phrases to focus on..."
+        )
+        
+        # Create two columns for the buttons
+        button_col1, button_col2 = st.columns(2)
+        
+        # Button to load sample JLPT5 word list in the first column
+        with button_col1:
+            if st.button("Load Sample JLPT5 Word List"):
+                try:
+                    with open('seed_data/JLPT5_words.txt', 'r', encoding='utf-8') as file:
+                        words = file.read().strip()
+                        st.session_state.study_word_focus = words  # Store in session state
+                        st.success("JLPT5 word list loaded successfully!")
+                        st.rerun()  # Force a rerun to update the UI
+                except Exception as e:
+                    st.error(f"Error loading word list: {str(e)}")
+        # Combined button to call Gemini for a new scenario in the second column
+        with button_col2:
+            if st.button("Call Gemini for a New Scenario"):
+                try:
+                    # Clear chat history
+                    st.session_state.chat_history = []
+                    st.session_state.scene_state['current_dialogue_index'] = 0
+                    
+                    # Don't reset study_word_focus if it contains user-entered words
+                    # Get the current study words from the text area
+                    current_study_words = study_word_focus.strip()
+                    
+                    # Reset other relevant session state variables
+                    st.session_state.scene_state['dialogue_lines'] = []
+                    st.session_state.scene_state['current_position'] = 'panel_0'
+                    st.session_state.scene_state['current_stage'] = 'background'
+                    st.session_state.scene_state['processing'] = False
+                    
+                    # Read the LLM prompt template from file
+                    with open('seed_data/LLM_prompt.md', 'r', encoding='utf-8') as file:
+                        prompt_template = file.read().strip()
+                    
+                    # If the user has entered study words, include them in the prompt
+                    if current_study_words:
+                        add_debug_message(f"Using user-provided word list: {current_study_words}")
+                        # Create a modified prompt that includes the user's word list
+                        prompt_with_words = f"The user has provided the following study words:\n\n{current_study_words}\n\n{prompt_template}"
+                        response = call_gemini_api(prompt_with_words)
+                    else:
+                        # If no words provided, let Gemini generate them as usual
+                        add_debug_message("No user-provided word list, Gemini will generate one")
+                        response = call_gemini_api(prompt_template)
+                    
+                    st.session_state.chat_history.append({"role": "assistant", "content": response})
+                    
+                    # Store the response in llm_response and set the flag to process it
+                    st.session_state.llm_response = response
+                    st.session_state.process_llm_response = True
+                    
+                    # Process the response immediately to ensure widgets are populated on first click
+                    # This helps bypass the need for a second click
+                    raw_response = response
+                    llm_response = parse_llm_response(raw_response)
+                    
+                    if llm_response is not None and llm_response.get("panel-number") == 0:
+                        # Extract values from the setup response
+                        word_list = llm_response["setup"]["word-list"]
+                        image_seed = llm_response["setup"]["image-seed"]
+                        scenario_description_english = llm_response["setup"]["scenario-description-english"]
+                        background_image_prompt_english = llm_response["setup"]["background-image-prompt-english"]
+                        introduction_english = llm_response["setup"]["introduction-english"]
+                        
+                        # Update session state with the extracted values
+                        st.session_state.word_list = word_list
+                        st.session_state.image_seed = image_seed
+                        st.session_state.scenario_description_english = scenario_description_english
+                        st.session_state.background_image_prompt_english = background_image_prompt_english
+                        st.session_state.introduction_english = introduction_english
+                        
+                        # Convert word list to a newline-separated string for display in the text area
+                        st.session_state.study_word_focus = "\n".join(word_list)
+                        
+                        # Update both seed and seed_value in session state
+                        st.session_state.seed = image_seed
+                        st.session_state.seed_value = image_seed
+                        
+                        # Immediately make a second API call to generate Panel 1
+                        add_debug_message("Automatically generating Panel 1...")
+                        
+                        # Create a prompt for Panel 1
+                        panel1_prompt = f"""NEW SESSION: Ignore all previous context. You are acting as a conversational partner in a Japanese language learning app. Your task is to generate Panel 1 for the conversation scenario described below.
+
+**Output only JSON in your response, exactly as specified in the format below. Do not include any additional content outside the JSON format.**
+
+Here's the scenario information from Panel 0:
+- Scenario: {scenario_description_english}
+- Introduction: {introduction_english}
+- Background: {background_image_prompt_english}
+- Word list: {', '.join(word_list)}
+
+Generate Panel 1 with a character image prompt and the first dialogue line in Japanese.
+Use at least one study word naturally in this first dialogue line.
+
+Your character image prompt must follow these requirements:
+- Focus ONLY on the character - do NOT include any environmental details or positioning
+- Specify the character's age, gender, and appearance (height, build, glasses, etc.)
+- State that the character is Japanese unless the scenario indicates otherwise
+- Describe clothing in general terms without colors or patterns
+- Briefly describe the character's current action or emotion
+- NEVER include colors (e.g., "brown", "red", "blue"), patterns, or style information
+
+Format your response as this JSON object:
+```json
+{{
+    "panel-number": 1,
+    "exchanges": [
+        {{
+            "character-image-prompt-english": "[Detailed character description including appearance and emotion]",
+            "dialogue-line-japanese": "[First dialogue line in Japanese using at least one study word]"
+        }}
+    ]
+}}
+```"""
+                        
+                        # Call the API to generate Panel 1
+                        panel1_response = call_gemini_api(panel1_prompt)
+                        add_debug_message(f"Raw Panel 1 response: {panel1_response}")
+                        
+                        # Parse the Panel 1 response
+                        panel1_data = parse_llm_response(panel1_response)
+                        add_debug_message(f"Parsed Panel 1 data: {panel1_data}")
+                        
+                        if panel1_data is not None and panel1_data.get("panel-number") == 1:
+                            # Store Panel 1 data in session state
+                            add_debug_message(f"Successfully generated Panel 1: {panel1_data}")
+                            
+                            # Extract the character image prompt and dialogue line
+                            if "exchanges" in panel1_data and len(panel1_data["exchanges"]) > 0:
+                                first_exchange = panel1_data["exchanges"][0]
+                                character_image_prompt = first_exchange.get("character-image-prompt-english", "")
+                                
+                                # Store in session state
+                                st.session_state.character_image_prompt_english = character_image_prompt
+                                
+                                # Extract dialogue line from the first exchange
+                                dialogue_line = first_exchange.get("dialogue-line-japanese", "")
+                                
+                                # Update the scene state to panel 1
+                                st.session_state.scene_state["current_position"] = "panel_1"
+                                st.session_state.scene_state["current_panel_number"] = 1
+                                
+                                # Process panel 1 using the new panel processing function
+                                st.session_state.scene_state["processing"] = True
+                                process_panel(1, panel1_data, character_description=character_image_prompt, seed=st.session_state.seed)
+                        else:
+                            add_debug_message("Failed to generate Panel 1 or response was invalid")
+                
+                    st.success("New scenario generated successfully!")
+                    # Force a rerun to ensure all widgets update with the new values
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Error generating scenario: {str(e)}")
+        
+        # Add a divider after the buttons
+        st.divider()
+        
+        # Display scenario description in a new widget
+        scenario_description = st.text_area(
+            "Scenario:",
+            height=80,
+            value=st.session_state.get('scenario_description_english', ""),
+            placeholder="Scenario description will appear here..."
+        )
+        
+        # Display introduction in a new widget
+        introduction = st.text_area(
+            "Introduction:",
+            height=100,
+            value=st.session_state.get('introduction_english', ""),
+            placeholder="Introduction will appear here..."
+        )
+        
+        # Background description - display the background prompt from the LLM response
+        background_description = st.text_area(
+            "Background description:",
+            height=100,
+            value=st.session_state.get('background_image_prompt_english', ""),
+            placeholder='e.g., "outside a theatre in a Japanese city"'
+        )
+        
+        # This button has been moved up, right after the 'Load Sample JLPT5 Word List' button
+
+        # Display the image seed as a simple text field (non-editable)
+        st.write(f"Image seed: {st.session_state.get('seed_value', 0)}")
+        
+        # Add a divider before the character description
+        st.divider()
+
+        # Character description with predefined prompt
+        character_description = st.text_area(
+            "Character description:",
+            height=100,
+            value=st.session_state.get('character_image_prompt_english', ""),
+            placeholder='e.g., "a Japanese woman smiling widely, short hair, square glasses, wearing dungarees"'
+        )
+        
+        # This section was moved above, after the introduction field
+
+        # Dialogue input with predefined prompt - accumulate conversation history
+        # Get the existing dialogue history or initialize with the first line if it exists
+        dialogue_history = ""
+        
+        # Initialize with the first AI response if available
+        if st.session_state.get('dialogue_japanese', ""):
+            dialogue_history = st.session_state.get('dialogue_japanese', "")
+        
+        # Add user responses and AI responses from chat history
+        for message in st.session_state.get('chat_history', []):
+            if message["role"] == "user" and message["content"].strip():
+                # Add user message with a prefix
+                dialogue_history += "\n\n[You]: " + message["content"]
+            elif message["role"] == "assistant" and message.get("dialogue_line", ""):
+                # Add AI dialogue line with a prefix
+                dialogue_history += "\n\n[AI]: " + message.get("dialogue_line", "")
+        
+        dialogue = st.text_area(
+            "Dialogue:",
+            height=200,  # Increased height to show more conversation
+            value=dialogue_history,
+            placeholder='e.g., "What a beautiful day!"'
         )
         
         # Generate buttons
@@ -560,11 +969,10 @@ def main():
         with col3:
             new_scene_button = st.button("New Scene")
         with col4:
-            # Enable next panel button only if we have a completed panel and fewer than 4 panels
+            # Enable next panel button only if we have a completed panel
             next_panel_button = st.button("Next panel", 
                                          disabled=st.session_state.scene_state['processing'] or 
-                                                 st.session_state.scene_state['current_stage'] != 'complete' or
-                                                 st.session_state.scene_state['panel_count'] >= 3)
+                                                 st.session_state.scene_state['current_stage'] != 'complete')
         with col5:
             # Process dialogue input and store in session state
             if dialogue:
@@ -593,78 +1001,150 @@ def main():
         st.info("Processing your prompts...")
     
     with right_col:
-        # Create layout for manga panels
+        # Add chat window at the top of the right column
+        st.subheader("Gemini conversation...")
+        
+        # Create a container for the chat history with fixed height and scrolling
+        chat_container = st.container(height=300, border=True)
+        
+        # Initialize chat history if it doesn't exist
+        if 'chat_history' not in st.session_state:
+            st.session_state.chat_history = []
+        
+        # Display chat history in the container
+        with chat_container:
+            for message in st.session_state.chat_history:
+                if message["role"] == "user":
+                    st.markdown(f"**You:** {message['content']}")
+                else:
+                    st.markdown(f"**AI:** {message['content']}")
+        
+        # Create a form for the chat input to handle submission properly
+        with st.form(key="chat_form", clear_on_submit=True):
+            # Chat input field
+            user_input = st.text_input("Type your message:")
+            
+            # Submit button
+            submit_button = st.form_submit_button("Send")
+            
+            if submit_button and user_input:
+                # Add user message to chat history
+                st.session_state.chat_history.append({"role": "user", "content": user_input})
+                
+                # Add user dialogue to the panel
+                user_dialogue = f"[You]: {user_input}"
+                add_dialogue_to_panel(user_dialogue, is_ai=False)
+                
+                # Create a prompt for the next dialogue line
+                current_panel = st.session_state.scene_state.get('current_position', 'panel_1')
+                current_dialogue_index = st.session_state.scene_state.get('current_dialogue_index', 0)
+                
+                # Get context from the current scenario
+                scenario = st.session_state.get('scenario_description_english', "")
+                word_list = st.session_state.get('word_list', [])
+                
+                # Create a prompt that instructs Gemini to continue the conversation
+                dialogue_prompt = f"""You are acting as a conversational partner in a Japanese language learning app. 
+                The user has responded to your previous dialogue line in our scenario: {scenario}.
+                
+                User's message: {user_input}
+                
+                Please respond with the next dialogue line in Japanese. Use natural conversational Japanese 
+                and try to incorporate one of these study words if possible: {', '.join(word_list[:5])}.
+                
+                Format your response as a JSON object with a dialogue-line-japanese field:
+                ```json
+                {{
+                    "panel-number": {current_panel.replace('panel_', '')},
+                    "dialogue-line-japanese": "[Your Japanese response here]"
+                }}
+                ```
+                """
+                
+                # Call Gemini for a response
+                response = call_gemini_api(dialogue_prompt)
+                
+                # Parse the JSON response to extract the dialogue line
+                dialogue_data = parse_llm_response(response)
+                dialogue_line = ""
+                
+                if dialogue_data and "dialogue-line-japanese" in dialogue_data:
+                    dialogue_line = dialogue_data["dialogue-line-japanese"]
+                    # Store the dialogue line in session state
+                    st.session_state.dialogue_japanese = dialogue_line
+                    
+                    # Add AI dialogue to the panel
+                    ai_dialogue = f"[AI]: {dialogue_line}"
+                    add_dialogue_to_panel(ai_dialogue, is_ai=True)
+                
+                # Add AI response to chat history with both the full response and the extracted dialogue line
+                st.session_state.chat_history.append({
+                    "role": "assistant", 
+                    "content": response,
+                    "dialogue_line": dialogue_line
+                })
+                
+                # Check if the response contains JSON that should be processed
+                if '{' in response and '}' in response:
+                    # Store the response in llm_response and set the flag to process it
+                    st.session_state.llm_response = response
+                    st.session_state.process_llm_response = True
+                
+                # Force a rerun to update the chat history
+                st.rerun()
+        
+        # Create layout for panels
         scene_container = st.container()
         with scene_container:
-            # Create a 2x2 grid for panels in the correct order
-            row1 = st.columns(2)
-            row2 = st.columns(2)
+            # Create columns for panel display
+            panel_left_col, panel_right_col = st.columns(2)
             
-            # Get columns in the right order for manga reading
-            tr_col = row1[0]  # Top-right (first position)
-            br_col = row2[0]  # Bottom-right (second position)
-            tl_col = row1[1]  # Top-left (third position)
-            bl_col = row2[1]  # Bottom-left (fourth position)
+            # Display all completed panels in alternating left-right pattern
+            panel_list = []
+            for position, image in st.session_state.scene_state['panels'].items():
+                if image is not None:
+                    panel_list.append(image)
             
-            # Display panels in manga order
-            with tr_col:
-                if st.session_state.scene_state['panels']['top_right'] is not None:
-                    st.image(st.session_state.scene_state['panels']['top_right'], use_container_width=True)
-            with br_col:
-                if st.session_state.scene_state['panels']['bottom_right'] is not None:
-                    st.image(st.session_state.scene_state['panels']['bottom_right'], use_container_width=True)
-            with tl_col:
-                if st.session_state.scene_state['panels']['top_left'] is not None:
-                    st.image(st.session_state.scene_state['panels']['top_left'], use_container_width=True)
-            with bl_col:
-                if st.session_state.scene_state['panels']['bottom_left'] is not None:
-                    st.image(st.session_state.scene_state['panels']['bottom_left'], use_container_width=True)
+            # Display panels in alternating left-right pattern
+            for i, panel in enumerate(panel_list):
+                if i % 2 == 0:  # Even index (0, 2, 4...) - left column
+                    with panel_left_col:
+                        st.image(panel, use_container_width=True)
+                else:  # Odd index (1, 3, 5...) - right column
+                    with panel_right_col:
+                        st.image(panel, use_container_width=True)
             
-            # Display current working image in the appropriate panel
-            current_position = st.session_state.scene_state['current_position']
+            # Display current working image in the appropriate column based on panel count
             current_image = None
-            
             if st.session_state.scene_state['current_stage'] == 'background':
                 current_image = st.session_state.scene_state['background_image']
             elif st.session_state.scene_state['current_stage'] in ['character', 'complete']:
                 current_image = st.session_state.scene_state['combined_image']
             
             if current_image is not None:
-                # Display in the current panel position
-                if current_position == 'top_right':
-                    with tr_col:
+                # Display in the next column based on panel count
+                if len(panel_list) % 2 == 0:  # Even number of panels so far, use left column
+                    with panel_left_col:
                         st.image(current_image, use_container_width=True)
-                elif current_position == 'bottom_right':
-                    with br_col:
+                else:  # Odd number of panels so far, use right column
+                    with panel_right_col:
                         st.image(current_image, use_container_width=True)
-                elif current_position == 'top_left':
-                    with tl_col:
-                        st.image(current_image, use_container_width=True)
-                elif current_position == 'bottom_left':
-                    with bl_col:
-                        st.image(current_image, use_container_width=True)
+            
+            # Play the most recent audio if available
+            if st.session_state.scene_state['current_dialogue_index'] > 0:
+                dialogue_index = st.session_state.scene_state['current_dialogue_index'] - 1
+                current_pos = st.session_state.scene_state['current_position']
+                audio_key = f"{current_pos}_{dialogue_index}"
+                
+                if audio_key in st.session_state.scene_state['dialogue_audio']:
+                    audio_content = st.session_state.scene_state['dialogue_audio'][audio_key]
+                    if audio_content:
+                        # Create a container for the audio player
+                        audio_container = st.container()
+                        with audio_container:
+                            st.write("Audio for current dialogue:")
+                            play_audio(audio_content)
     
-    # Play the most recent audio if available - moved outside the column layout
-    if st.session_state.scene_state['current_dialogue_index'] > 0:
-        dialogue_index = st.session_state.scene_state['current_dialogue_index'] - 1
-        audio_key = f"{current_position}_{dialogue_index}"
-        
-        if audio_key in st.session_state.scene_state['dialogue_audio']:
-            audio_content = st.session_state.scene_state['dialogue_audio'][audio_key]
-            if audio_content:
-                # Use the dedicated audio container at the top
-                with audio_container:
-                    st.write("Audio for current dialogue:")
-                    
-                    # Check if this is the newly added audio that should autoplay
-                    if 'new_audio_key' in st.session_state.scene_state and st.session_state.scene_state['new_audio_key'] == audio_key:
-                        play_audio_with_autoplay(audio_content)
-                        # Clear the new audio flag after playing
-                        st.session_state.scene_state['new_audio_key'] = None
-                    else:
-                        # Use regular audio player for previously played audio
-                        play_audio(audio_content)
-
     # Handle generation
     if new_scene_button:
         if character_description and background_description:
@@ -677,14 +1157,9 @@ def main():
                 
             # Reset scene state for new scene
             st.session_state.scene_state = {
-                'panels': {
-                    'top_right': None,
-                    'bottom_right': None,
-                    'top_left': None,
-                    'bottom_left': None
-                },
+                'panels': {},  # Empty dictionary to store panels
                 'panel_count': 0,
-                'current_position': 'top_right',
+                'current_position': 'panel_0',  # Simplified position naming
                 'current_stage': 'background',
                 'scene_background': None,
                 'background_image': None,
@@ -707,14 +1182,14 @@ def main():
             st.session_state.scene_state['panels'][current_pos] = st.session_state.scene_state['combined_image']
             st.session_state.scene_state['panel_count'] += 1
             
-            # Move to the next panel position
-            next_pos = get_next_panel_position()
+            # Create a new panel position
+            next_pos = f"panel_{st.session_state.scene_state['panel_count']}"
             st.session_state.scene_state['current_position'] = next_pos
             st.session_state.scene_state['current_stage'] = 'character'  # Skip background generation
             st.session_state.scene_state['background_image'] = st.session_state.scene_state['scene_background']  # Reuse background
             st.session_state.scene_state['character_image'] = None
-            st.session_state.scene_state['combined_image'] = None
-            st.session_state.scene_state['processing'] = True
+            st.session_state['combined_image'] = None
+            st.session_state['processing'] = True
             
             st.rerun()
         else:
@@ -731,15 +1206,160 @@ def main():
     
     # Process the current stage if we're in processing mode
     if st.session_state.scene_state['processing']:
-        process_current_stage(character_description, background_description, st.session_state.seed)
+        should_continue = process_current_stage(character_description, background_description, st.session_state.seed)
+        
+        # If processing was successful and we need to continue to the next stage, rerun the app
+        if should_continue:
+            st.rerun()
+
+def process_panel(panel_number, panel_data, character_description=None, background_description=None, seed=None):
+    """Process a specific panel based on its number and data.
+    
+    Args:
+        panel_number: The panel number (0 for setup, 1+ for content panels)
+        panel_data: Dictionary containing panel-specific data
+        character_description: Character description for this panel (for panels 1+)
+        background_description: Background description (for panel 0)
+        seed: Random seed for image generation
+        
+    Returns:
+        Boolean indicating if processing was successful
+    """
+    # Store the current panel number in session state
+    st.session_state.scene_state['current_panel_number'] = panel_number
+    
+    # Panel 0 is for setup (background generation and introduction)
+    if panel_number == 0:
+        # Store panel data in the panel_data dictionary
+        st.session_state.scene_state['panel_data'][panel_number] = panel_data
+        
+        # Process background generation
+        background_success = process_background(background_description, seed)
+        
+        # Generate audio for introduction if available
+        if 'introduction-english' in panel_data.get('setup', {}):
+            introduction = panel_data['setup']['introduction-english']
+            # TODO: Generate audio for introduction (future enhancement)
+            
+        return background_success
+    
+    # Panels 1+ are for character and dialogue
+    else:
+        # Store panel data in the panel_data dictionary
+        if panel_number not in st.session_state.scene_state['panel_data']:
+            st.session_state.scene_state['panel_data'][panel_number] = panel_data
+        
+        # Process character generation and overlay on background
+        if character_description:
+            character_success = process_character(character_description, seed)
+            if not character_success:
+                return False
+        
+        # Process dialogue if available
+        # Check if dialogue is directly in panel_data
+        if 'dialogue-line-japanese' in panel_data:
+            dialogue_line = panel_data['dialogue-line-japanese']
+            # Add AI dialogue to the panel with proper styling
+            ai_dialogue = f"[AI]: {dialogue_line}"
+            add_dialogue_to_panel(ai_dialogue, is_ai=True)
+        # Check if dialogue is in the exchanges array
+        elif 'exchanges' in panel_data and len(panel_data['exchanges']) > 0:
+            first_exchange = panel_data['exchanges'][0]
+            if 'dialogue-line-japanese' in first_exchange:
+                dialogue_line = first_exchange['dialogue-line-japanese']
+                # Add AI dialogue to the panel with proper styling
+                ai_dialogue = f"[AI]: {dialogue_line}"
+                add_dialogue_to_panel(ai_dialogue, is_ai=True)
+        
+        return True
+
+def process_background(background_description, seed):
+    """Process background generation for a scene."""
+    # Read the background style prompt suffix from file
+    try:
+        with open('seed_data/background_style_prompt_suffix.txt', 'r', encoding='utf-8') as file:
+            background_style_suffix = file.read().strip()
+        # Append the background style suffix to the background description
+        enhanced_background_description = f"{background_description}. {background_style_suffix}"
+        add_debug_message(f"Enhanced background prompt: {enhanced_background_description}")
+    except Exception as e:
+        add_debug_message(f"Error reading background style suffix: {str(e)}")
+        enhanced_background_description = background_description
+        
+    # Generate background image only for the first panel in a scene
+    background_image = generate_image(enhanced_background_description, steps=4, seed=seed)
+    if background_image:
+        # Apply Gaussian blur for combined view
+        blurred_background = apply_gaussian_blur(background_image)
+        
+        # Store the background image for this scene
+        st.session_state.scene_state['scene_background'] = blurred_background
+        st.session_state.scene_state['background_image'] = blurred_background
+        
+        # Wait for a moment before generating character (reduced if image generation is disabled)
+        if ENABLE_IMAGE_GENERATION:
+            time.sleep(5)  # Reduced wait time
+        else:
+            time.sleep(1)  # Shorter wait time when image generation is disabled
+        
+        return True
+    else:
+        st.error("Failed to generate background image.")
+        st.session_state.scene_state['processing'] = False
+        return False
+
+def process_character(character_description, seed):
+    """Process character generation and overlay on background."""
+    # Read the character style prompt suffix from file
+    try:
+        with open('seed_data/character_style_prompt_suffix.txt', 'r', encoding='utf-8') as file:
+            character_style_suffix = file.read().strip()
+        # Append the character style suffix to the character description
+        enhanced_character_description = f"{character_description}. {character_style_suffix}"
+        add_debug_message(f"Enhanced character prompt: {enhanced_character_description}")
+    except Exception as e:
+        add_debug_message(f"Error reading character style suffix: {str(e)}")
+        enhanced_character_description = character_description
+        
+    # Generate character image
+    character_image = generate_image(enhanced_character_description, steps=4, seed=seed)
+    if character_image:
+        # Get the background image
+        background_image = st.session_state.scene_state['background_image']
+        
+        # Create combined image
+        combined_image = overlay_images(background_image, character_image)
+        st.session_state.scene_state['combined_image'] = combined_image
+        st.session_state.scene_state['character_image'] = character_image
+        
+        # Mark as complete
+        st.session_state.scene_state['current_stage'] = 'complete'
+        st.session_state.scene_state['processing'] = False
+        
+        return True
+    else:
+        st.error("Failed to generate character image.")
+        st.session_state.scene_state['processing'] = False
+        return False
 
 def process_current_stage(character_description, background_description, seed):
     """Process the current stage of scene generation."""
     current_stage = st.session_state.scene_state['current_stage']
     
     if current_stage == 'background':
+        # Read the background style prompt suffix from file
+        try:
+            with open('seed_data/background_style_prompt_suffix.txt', 'r', encoding='utf-8') as file:
+                background_style_suffix = file.read().strip()
+            # Append the background style suffix to the background description
+            enhanced_background_description = f"{background_description}. {background_style_suffix}"
+            add_debug_message(f"Enhanced background prompt: {enhanced_background_description}")
+        except Exception as e:
+            add_debug_message(f"Error reading background style suffix: {str(e)}")
+            enhanced_background_description = background_description
+            
         # Generate background image only for the first panel in a scene
-        background_image = generate_image(background_description, steps=4, seed=seed)
+        background_image = generate_image(enhanced_background_description, steps=4, seed=seed)
         if background_image:
             # Apply Gaussian blur for combined view
             blurred_background = apply_gaussian_blur(background_image)
@@ -757,14 +1377,27 @@ def process_current_stage(character_description, background_description, seed):
             else:
                 time.sleep(1)  # Shorter wait time when image generation is disabled
             
-            st.rerun()
+            # Return True to indicate successful processing and that we should continue
+            return True
         else:
             st.error("Failed to generate background image.")
             st.session_state.scene_state['processing'] = False
+            return False
     
     elif current_stage == 'character':
+        # Read the character style prompt suffix from file
+        try:
+            with open('seed_data/character_style_prompt_suffix.txt', 'r', encoding='utf-8') as file:
+                character_style_suffix = file.read().strip()
+            # Append the character style suffix to the character description
+            enhanced_character_description = f"{character_description}. {character_style_suffix}"
+            add_debug_message(f"Enhanced character prompt: {enhanced_character_description}")
+        except Exception as e:
+            add_debug_message(f"Error reading character style suffix: {str(e)}")
+            enhanced_character_description = character_description
+            
         # Generate character image
-        character_image = generate_image(character_description, steps=4, seed=seed)
+        character_image = generate_image(enhanced_character_description, steps=4, seed=seed)
         if character_image:
             # Get the background image
             background_image = st.session_state.scene_state['background_image']
@@ -778,10 +1411,64 @@ def process_current_stage(character_description, background_description, seed):
             st.session_state.scene_state['current_stage'] = 'complete'
             st.session_state.scene_state['processing'] = False
             
-            st.rerun()
+            # Return True to indicate successful processing
+            return True
         else:
             st.error("Failed to generate character image.")
             st.session_state.scene_state['processing'] = False
+            return False
+
+# Update the call_gemini_api function to accept a prompt parameter
+def call_gemini_api(prompt, max_retries=3):
+    """Call the Gemini API with the given prompt.
+    
+    Args:
+        prompt: The prompt to send to the Gemini API.
+        max_retries: Maximum number of retry attempts if valid JSON is not returned.
+        
+    Returns:
+        The response text from the Gemini API.
+    """
+    try:
+        # Load environment variables
+        load_dotenv()
+        
+        # Configure Gemini
+        api_key = os.getenv('GOOGLE_GEMINI_API_KEY')
+        if not api_key:
+            raise ValueError("GOOGLE_GEMINI_API_KEY not found in .env file")
+        
+        genai.configure(api_key=api_key)
+        
+        # Create a model instance
+        model = genai.GenerativeModel('gemini-2.0-flash')
+        
+        # Try multiple times to get a valid JSON response
+        for attempt in range(max_retries):
+            # Generate a response based on the prompt
+            response = model.generate_content(prompt)
+            response_text = response.text
+            
+            # Check if the response contains valid JSON
+            parsed_json = parse_llm_response(response_text)
+            
+            if parsed_json is not None:
+                add_debug_message(f"Got valid JSON response on attempt {attempt + 1}")
+                return response_text
+            else:
+                add_debug_message(f"Attempt {attempt + 1}/{max_retries} failed to produce valid JSON. Retrying...")
+                
+                # Add a stronger hint for the retry
+                if attempt < max_retries - 1:  # Only add hint if we're going to retry
+                    prompt = f"{prompt}\n\nIMPORTANT: Your previous response did not contain valid JSON. Please respond ONLY with a JSON object in the specified format. Do not include any explanatory text outside the JSON."
+        
+        # If we've exhausted all retries, return the last response
+        add_debug_message("All retry attempts failed to produce valid JSON. Returning last response.")
+        return response_text
+        
+    except Exception as e:
+        print(f"Error calling Gemini API: {str(e)}")
+        return f"Error generating response: {str(e)}"
 
 if __name__ == "__main__":
     main() 
