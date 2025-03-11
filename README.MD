@@ -8,4 +8,9 @@
 - IMMERSIVE_SPEC.MD
 - INSTALL.MD
 
-It is *not* fully functional as the control flow from LLM is not working (reliably) but I have learned from the experience!
+It is *deinitely not* fully functional as the control flow from LLM is not working at all reliably... but I have learned from the experience!
+
+![example with dialogue 1](screenshots/imm-05.png)
+![example with dialogue 2](screenshots/imm-04.png)
+![consistency in image example](screenshots/imm-02.png)
+![style example](screenshots/imm-01.png)
